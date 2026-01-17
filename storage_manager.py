@@ -1,16 +1,35 @@
 """
-Storage Manager
-Google Drive integration for persistent data storage
+Storage Manager with Google Drive as Primary Storage
+Complete implementation with local fallback
 
-Design: Human-readable CSVs, append-only with upsert by ID
-Philosophy: Auditable history, no data loss
+Design: Cloud-first with local caching
+Philosophy: Persistent, accessible, auditable
 """
 
 import pandas as pd
 import os
-from typing import Optional
+import json
+from typing import Optional, Dict
 from pathlib import Path
 from datetime import datetime
+import io
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GOOGLE DRIVE INTEGRATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+try:
+    from google.oauth2.credentials import Credentials
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload, MediaIoBaseUpload
+    from googleapiclient.errors import HttpError
+    DRIVE_AVAILABLE = True
+except ImportError:
+    DRIVE_AVAILABLE = False
+    print("⚠️  Google Drive libraries not installed. Install with:")
+    print("   pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -18,60 +37,308 @@ from datetime import datetime
 # ═══════════════════════════════════════════════════════════════════════════
 
 class StorageConfig:
-    """Storage configuration for local and Drive"""
+    """Storage configuration for Drive and local fallback"""
     
-    # Local storage (for development/backup)
+    # Local storage (for caching/fallback)
     LOCAL_STORAGE_DIR = Path("./data")
+    LOCAL_CACHE_DIR = Path("./data/cache")
     
-    # Google Drive folder ID (set this to your Drive folder)
-    # You'll need to share this folder with your service account
-    DRIVE_FOLDER_ID = None  # Replace with actual folder ID
+    # Credentials
+    CREDENTIALS_FILE = "credentials.json"  # Service account or OAuth credentials
+    TOKEN_FILE = "token.json"  # OAuth token (if using OAuth)
+    
+    # Google Drive folder name (will be created if doesn't exist)
+    DRIVE_FOLDER_NAME = "TradingSystem_Data"
     
     # File names
     PAPER_TRADES_FILE = "paper_trades.csv"
     ANALYSIS_LOG_FILE = "analysis_log.csv"
+    METADATA_FILE = "metadata.json"
     
     @classmethod
-    def ensure_local_dir(cls):
-        """Create local storage directory if it doesn't exist"""
+    def ensure_local_dirs(cls):
+        """Create local storage directories"""
         cls.LOCAL_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        cls.LOCAL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# STORAGE MANAGER
+# GOOGLE DRIVE CLIENT
+# ═══════════════════════════════════════════════════════════════════════════
+
+class DriveClient:
+    """Google Drive API client wrapper"""
+    
+    def __init__(self, credentials_path: str = None):
+        """
+        Initialize Drive client
+        
+        Args:
+            credentials_path: Path to credentials JSON file
+        """
+        if not DRIVE_AVAILABLE:
+            raise ImportError("Google Drive libraries not installed")
+        
+        self.credentials_path = credentials_path or StorageConfig.CREDENTIALS_FILE
+        self.service = None
+        self.folder_id = None
+        self._authenticate()
+    
+    def _authenticate(self):
+        """Authenticate with Google Drive"""
+        creds = None
+        
+        # Check if credentials file exists
+        if not Path(self.credentials_path).exists():
+            raise FileNotFoundError(
+                f"Credentials file not found: {self.credentials_path}\n"
+                "Please follow setup instructions in README"
+            )
+        
+        # Load credentials
+        try:
+            # Try service account first
+            creds = service_account.Credentials.from_service_account_file(
+                self.credentials_path,
+                scopes=['https://www.googleapis.com/auth/drive.file']
+            )
+        except Exception:
+            # Fall back to OAuth (for user accounts)
+            from google.auth.transport.requests import Request
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            
+            token_path = Path(StorageConfig.TOKEN_FILE)
+            
+            if token_path.exists():
+                creds = Credentials.from_authorized_user_file(
+                    str(token_path),
+                    ['https://www.googleapis.com/auth/drive.file']
+                )
+            
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        self.credentials_path,
+                        ['https://www.googleapis.com/auth/drive.file']
+                    )
+                    creds = flow.run_local_server(port=0)
+                
+                # Save token
+                with open(token_path, 'w') as token:
+                    token.write(creds.to_json())
+        
+        # Build service
+        self.service = build('drive', 'v3', credentials=creds)
+    
+    def get_or_create_folder(self, folder_name: str) -> str:
+        """
+        Get or create folder in Drive
+        
+        Args:
+            folder_name: Folder name
+        
+        Returns:
+            Folder ID
+        """
+        # Search for existing folder
+        query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        
+        try:
+            results = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            
+            folders = results.get('files', [])
+            
+            if folders:
+                return folders[0]['id']
+            
+            # Create new folder
+            file_metadata = {
+                'name': folder_name,
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            
+            folder = self.service.files().create(
+                body=file_metadata,
+                fields='id'
+            ).execute()
+            
+            return folder.get('id')
+            
+        except HttpError as e:
+            raise Exception(f"Failed to get/create folder: {e}")
+    
+    def upload_file(self, local_path: Path, remote_name: str, folder_id: str) -> str:
+        """
+        Upload file to Drive (create or update)
+        
+        Args:
+            local_path: Local file path
+            remote_name: Remote file name
+            folder_id: Parent folder ID
+        
+        Returns:
+            File ID
+        """
+        # Check if file exists
+        query = f"name='{remote_name}' and '{folder_id}' in parents and trashed=false"
+        
+        try:
+            results = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            
+            files = results.get('files', [])
+            
+            # Read file content
+            with open(local_path, 'rb') as f:
+                content = f.read()
+            
+            media = MediaIoBaseUpload(
+                io.BytesIO(content),
+                mimetype='text/csv',
+                resumable=True
+            )
+            
+            if files:
+                # Update existing file
+                file_id = files[0]['id']
+                self.service.files().update(
+                    fileId=file_id,
+                    media_body=media
+                ).execute()
+                return file_id
+            else:
+                # Create new file
+                file_metadata = {
+                    'name': remote_name,
+                    'parents': [folder_id]
+                }
+                
+                file = self.service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+                
+                return file.get('id')
+                
+        except HttpError as e:
+            raise Exception(f"Failed to upload file: {e}")
+    
+    def download_file(self, file_name: str, folder_id: str, local_path: Path) -> bool:
+        """
+        Download file from Drive
+        
+        Args:
+            file_name: Remote file name
+            folder_id: Parent folder ID
+            local_path: Local destination path
+        
+        Returns:
+            True if successful
+        """
+        query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
+        
+        try:
+            results = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            
+            files = results.get('files', [])
+            
+            if not files:
+                return False
+            
+            file_id = files[0]['id']
+            
+            request = self.service.files().get_media(fileId=file_id)
+            
+            with open(local_path, 'wb') as f:
+                downloader = MediaIoBaseDownload(f, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+            
+            return True
+            
+        except HttpError as e:
+            print(f"Failed to download file: {e}")
+            return False
+    
+    def list_files(self, folder_id: str) -> list:
+        """List files in folder"""
+        query = f"'{folder_id}' in parents and trashed=false"
+        
+        try:
+            results = self.service.files().list(
+                q=query,
+                spaces='drive',
+                fields='files(id, name, modifiedTime, size)'
+            ).execute()
+            
+            return results.get('files', [])
+            
+        except HttpError as e:
+            print(f"Failed to list files: {e}")
+            return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STORAGE MANAGER (Drive-First)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class StorageManager:
     """
-    Manages persistent storage of trades and analysis logs
+    Drive-first storage manager with local caching
     
-    Storage Strategy:
-    1. Primary: Local CSV files (always accessible)
-    2. Backup: Google Drive (optional, for cloud sync)
-    
-    For Google Drive integration, you'll need:
-    - Google Cloud Project with Drive API enabled
-    - Service account credentials JSON
-    - PyDrive2 or google-api-python-client
-    
-    This implementation uses LOCAL storage by default.
-    Drive sync can be added as an enhancement.
+    Strategy:
+    1. Primary: Google Drive (cloud persistence)
+    2. Cache: Local files (faster access, offline fallback)
+    3. Sync: Bidirectional (Drive → Local on load, Local → Drive on save)
     """
     
-    def __init__(self, use_drive: bool = False):
+    def __init__(self, use_drive: bool = True, credentials_path: str = None):
         """
         Initialize storage manager
         
         Args:
-            use_drive: Whether to sync with Google Drive
+            use_drive: Use Google Drive (default: True)
+            credentials_path: Path to credentials file
         """
         self.config = StorageConfig()
-        self.config.ensure_local_dir()
-        self.use_drive = use_drive
+        self.config.ensure_local_dirs()
         
-        # Paths
-        self.trades_path = self.config.LOCAL_STORAGE_DIR / self.config.PAPER_TRADES_FILE
-        self.analysis_path = self.config.LOCAL_STORAGE_DIR / self.config.ANALYSIS_LOG_FILE
+        self.use_drive = use_drive and DRIVE_AVAILABLE
+        self.drive_client = None
+        self.folder_id = None
+        
+        # Initialize Drive
+        if self.use_drive:
+            try:
+                self.drive_client = DriveClient(credentials_path)
+                self.folder_id = self.drive_client.get_or_create_folder(
+                    self.config.DRIVE_FOLDER_NAME
+                )
+                print(f"✅ Connected to Google Drive folder: {self.config.DRIVE_FOLDER_NAME}")
+            except Exception as e:
+                print(f"⚠️  Drive initialization failed: {e}")
+                print("   Falling back to local storage only")
+                self.use_drive = False
+        
+        # Local paths
+        self.trades_path = self.config.LOCAL_CACHE_DIR / self.config.PAPER_TRADES_FILE
+        self.analysis_path = self.config.LOCAL_CACHE_DIR / self.config.ANALYSIS_LOG_FILE
+        self.metadata_path = self.config.LOCAL_CACHE_DIR / self.config.METADATA_FILE
     
     # ═══════════════════════════════════════════════════════════════════════
     # PAPER TRADES STORAGE
@@ -79,9 +346,7 @@ class StorageManager:
     
     def save_trades(self, trades_df: pd.DataFrame) -> bool:
         """
-        Save paper trades to storage
-        
-        Uses upsert strategy: update existing trades by ID, append new ones
+        Save paper trades (Drive-first)
         
         Args:
             trades_df: DataFrame with trade data
@@ -93,53 +358,67 @@ class StorageManager:
             if trades_df.empty:
                 return True
             
-            # Load existing trades
+            # Load existing trades (from cache or Drive)
             existing_df = self.load_trades()
             
             if existing_df.empty:
-                # No existing data, save directly
                 combined_df = trades_df
             else:
-                # Upsert: remove existing trades with same ID, then append new
+                # Upsert strategy
                 existing_ids = set(existing_df['trade_id'].values)
                 new_ids = set(trades_df['trade_id'].values)
                 
-                # Keep existing trades not in new batch
                 kept_df = existing_df[~existing_df['trade_id'].isin(new_ids)]
-                
-                # Combine kept + new
                 combined_df = pd.concat([kept_df, trades_df], ignore_index=True)
             
             # Sort by entry date
             combined_df = combined_df.sort_values('entry_date')
             
-            # Save
+            # Save to local cache first
             combined_df.to_csv(self.trades_path, index=False)
             
-            # Sync to Drive if enabled
+            # Upload to Drive
             if self.use_drive:
-                self._sync_to_drive(self.trades_path, self.config.PAPER_TRADES_FILE)
+                self.drive_client.upload_file(
+                    self.trades_path,
+                    self.config.PAPER_TRADES_FILE,
+                    self.folder_id
+                )
+                print(f"✅ Trades synced to Drive ({len(combined_df)} total)")
+            
+            # Update metadata
+            self._update_metadata('trades', len(combined_df))
             
             return True
             
         except Exception as e:
-            print(f"Error saving trades: {e}")
+            print(f"❌ Error saving trades: {e}")
             return False
     
     def load_trades(self) -> pd.DataFrame:
         """
-        Load paper trades from storage
+        Load paper trades (Drive-first with local cache)
         
         Returns:
-            DataFrame with trade data, empty if file doesn't exist
+            DataFrame with trade data
         """
         try:
+            # Try to download from Drive first
+            if self.use_drive:
+                success = self.drive_client.download_file(
+                    self.config.PAPER_TRADES_FILE,
+                    self.folder_id,
+                    self.trades_path
+                )
+                if success:
+                    print("📥 Loaded trades from Drive")
+            
+            # Load from local cache
             if not self.trades_path.exists():
                 return pd.DataFrame()
             
             df = pd.read_csv(self.trades_path)
             
-            # Convert date columns
             if not df.empty:
                 df['entry_date'] = pd.to_datetime(df['entry_date'])
                 df['exit_date'] = pd.to_datetime(df['exit_date'])
@@ -147,7 +426,7 @@ class StorageManager:
             return df
             
         except Exception as e:
-            print(f"Error loading trades: {e}")
+            print(f"⚠️  Error loading trades: {e}")
             return pd.DataFrame()
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -156,12 +435,7 @@ class StorageManager:
     
     def save_analysis_log(self, log_df: pd.DataFrame) -> bool:
         """
-        Save daily analysis log
-        
-        Logs all analyzed stocks (including rejected ones) to track:
-        - Why stocks were rejected
-        - Market regime during analysis
-        - Filter harshness over time
+        Save analysis log (Drive-first)
         
         Args:
             log_df: DataFrame with analysis results
@@ -179,147 +453,173 @@ class StorageManager:
             if existing_df.empty:
                 combined_df = log_df
             else:
-                # Append new entries (analysis log is append-only)
-                # Remove duplicates based on symbol + date
+                # Append and deduplicate
                 combined_df = pd.concat([existing_df, log_df], ignore_index=True)
-                combined_df = combined_df.drop_duplicates(subset=['symbol', 'date'], keep='last')
+                combined_df = combined_df.drop_duplicates(
+                    subset=['symbol', 'date'],
+                    keep='last'
+                )
             
             # Sort by date
             combined_df = combined_df.sort_values('date')
             
-            # Save
+            # Save to local cache
             combined_df.to_csv(self.analysis_path, index=False)
             
-            # Sync to Drive if enabled
+            # Upload to Drive
             if self.use_drive:
-                self._sync_to_drive(self.analysis_path, self.config.ANALYSIS_LOG_FILE)
+                self.drive_client.upload_file(
+                    self.analysis_path,
+                    self.config.ANALYSIS_LOG_FILE,
+                    self.folder_id
+                )
+                print(f"✅ Analysis log synced to Drive ({len(combined_df)} entries)")
+            
+            # Update metadata
+            self._update_metadata('analyses', len(combined_df))
             
             return True
             
         except Exception as e:
-            print(f"Error saving analysis log: {e}")
+            print(f"❌ Error saving analysis log: {e}")
             return False
     
     def load_analysis_log(self) -> pd.DataFrame:
         """
-        Load analysis log from storage
+        Load analysis log (Drive-first with local cache)
         
         Returns:
-            DataFrame with analysis log, empty if file doesn't exist
+            DataFrame with analysis log
         """
         try:
+            # Try to download from Drive first
+            if self.use_drive:
+                success = self.drive_client.download_file(
+                    self.config.ANALYSIS_LOG_FILE,
+                    self.folder_id,
+                    self.analysis_path
+                )
+                if success:
+                    print("📥 Loaded analysis log from Drive")
+            
+            # Load from local cache
             if not self.analysis_path.exists():
                 return pd.DataFrame()
             
             df = pd.read_csv(self.analysis_path)
             
-            # Convert date column
             if not df.empty:
                 df['date'] = pd.to_datetime(df['date'])
             
             return df
             
         except Exception as e:
-            print(f"Error loading analysis log: {e}")
+            print(f"⚠️  Error loading analysis log: {e}")
             return pd.DataFrame()
     
     # ═══════════════════════════════════════════════════════════════════════
-    # GOOGLE DRIVE SYNC (Stub - implement when needed)
+    # METADATA MANAGEMENT
     # ═══════════════════════════════════════════════════════════════════════
     
-    def _sync_to_drive(self, local_path: Path, remote_name: str) -> bool:
-        """
-        Sync local file to Google Drive
+    def _update_metadata(self, key: str, value):
+        """Update metadata file"""
+        metadata = self._load_metadata()
+        metadata[key] = value
+        metadata['last_updated'] = datetime.now().isoformat()
         
-        STUB IMPLEMENTATION - To implement:
-        1. Set up Google Cloud Project
-        2. Enable Drive API
-        3. Create service account
-        4. Download credentials JSON
-        5. Install: pip install PyDrive2
-        6. Implement upload logic
+        with open(self.metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+    
+    def _load_metadata(self) -> Dict:
+        """Load metadata file"""
+        if not self.metadata_path.exists():
+            return {}
         
-        Args:
-            local_path: Local file path
-            remote_name: Remote file name
-        
-        Returns:
-            True if successful
-        """
-        # TODO: Implement Google Drive sync
-        # Example using PyDrive2:
-        #
-        # from pydrive2.auth import GoogleAuth
-        # from pydrive2.drive import GoogleDrive
-        #
-        # gauth = GoogleAuth()
-        # gauth.LocalWebserverAuth()
-        # drive = GoogleDrive(gauth)
-        #
-        # # Search for existing file
-        # file_list = drive.ListFile({
-        #     'q': f"title='{remote_name}' and trashed=false"
-        # }).GetList()
-        #
-        # if file_list:
-        #     # Update existing file
-        #     file = file_list[0]
-        #     file.SetContentFile(str(local_path))
-        #     file.Upload()
-        # else:
-        #     # Create new file
-        #     file = drive.CreateFile({'title': remote_name})
-        #     file.SetContentFile(str(local_path))
-        #     file.Upload()
-        
-        return True
+        try:
+            with open(self.metadata_path, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return {}
     
     # ═══════════════════════════════════════════════════════════════════════
     # UTILITY METHODS
     # ═══════════════════════════════════════════════════════════════════════
     
     def export_trades_for_analysis(self, output_path: Optional[str] = None) -> pd.DataFrame:
-        """
-        Export trades in analysis-friendly format
-        
-        Args:
-            output_path: Optional path to save exported data
-        
-        Returns:
-            DataFrame ready for analysis
-        """
+        """Export trades for external analysis"""
         df = self.load_trades()
         
         if df.empty:
             return df
         
-        # Add derived columns for analysis
+        # Add derived columns
         df['entry_year'] = pd.to_datetime(df['entry_date']).dt.year
         df['entry_month'] = pd.to_datetime(df['entry_date']).dt.month
         df['entry_weekday'] = pd.to_datetime(df['entry_date']).dt.day_name()
         
         if output_path:
             df.to_csv(output_path, index=False)
+            print(f"📁 Exported to: {output_path}")
         
         return df
     
     def get_storage_info(self) -> dict:
-        """Get information about stored data"""
-        
+        """Get storage status information"""
         trades_df = self.load_trades()
         log_df = self.load_analysis_log()
+        metadata = self._load_metadata()
         
-        return {
+        info = {
+            "storage_mode": "Google Drive + Local Cache" if self.use_drive else "Local Only",
+            "drive_connected": self.use_drive,
+            "drive_folder": self.config.DRIVE_FOLDER_NAME if self.use_drive else "N/A",
+            "local_cache_dir": str(self.config.LOCAL_CACHE_DIR),
             "trades_file": str(self.trades_path),
-            "trades_exist": self.trades_path.exists(),
             "total_trades": len(trades_df),
             "open_trades": len(trades_df[trades_df['status'] == 'OPEN']) if not trades_df.empty else 0,
             "closed_trades": len(trades_df[trades_df['status'] == 'CLOSED']) if not trades_df.empty else 0,
             "analysis_log_file": str(self.analysis_path),
-            "analysis_log_exist": self.analysis_path.exists(),
             "total_analyses": len(log_df),
-            "drive_sync_enabled": self.use_drive,
+            "last_updated": metadata.get('last_updated', 'Never'),
         }
+        
+        # Add Drive file info if available
+        if self.use_drive and self.drive_client:
+            try:
+                files = self.drive_client.list_files(self.folder_id)
+                info['drive_files'] = [f['name'] for f in files]
+            except Exception:
+                info['drive_files'] = []
+        
+        return info
+    
+    def force_sync_from_drive(self) -> bool:
+        """Force download all files from Drive"""
+        if not self.use_drive:
+            print("⚠️  Drive not enabled")
+            return False
+        
+        try:
+            # Download trades
+            self.drive_client.download_file(
+                self.config.PAPER_TRADES_FILE,
+                self.folder_id,
+                self.trades_path
+            )
+            
+            # Download analysis log
+            self.drive_client.download_file(
+                self.config.ANALYSIS_LOG_FILE,
+                self.folder_id,
+                self.analysis_path
+            )
+            
+            print("✅ Synced all files from Drive")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Sync failed: {e}")
+            return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -327,15 +627,7 @@ class StorageManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def analysis_result_to_log_entry(analysis_result) -> dict:
-    """
-    Convert AnalysisResult to log entry dictionary
-    
-    Args:
-        analysis_result: AnalysisResult from analysis engine
-    
-    Returns:
-        Dictionary suitable for analysis log
-    """
+    """Convert AnalysisResult to log entry dictionary"""
     return {
         'date': analysis_result.date,
         'symbol': analysis_result.symbol,
