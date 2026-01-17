@@ -1,15 +1,20 @@
 # Core Trading System Dependencies
-streamlit==1.30.0
-pandas==2.1.4
-numpy==1.26.2
-yfinance==0.2.33
-plotly==5.18.0
-pytz==2024.1
+streamlit
+pandas
+numpy
+yfinance
+plotly
+pytz
 
 # Google Drive Integration
-google-api-python-client==2.111.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.0
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
 
 # Optional: Progress bars and utilities
-tqdm==4.66.1
+tqdm
+
+smartapi-python
+beautifulsoup4
+requests
+websocket-client
