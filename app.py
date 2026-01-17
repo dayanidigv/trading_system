@@ -209,8 +209,8 @@ def main():
     elif page == "Analytics Dashboard":
         show_analytics()
     elif page == "Settings":
-        show_settings()
-
+        # show_settings()
+        show_fundamental_analysis_section()
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PAGE: DAILY ANALYSIS
@@ -1062,6 +1062,121 @@ def show_settings():
     """)
 
 
+def show_fundamental_analysis_section():
+    """Display fundamental analysis log with proper None handling"""
+
+    st.subheader("📊 Fundamental Analysis Log")
+
+    # Load analysis log
+    analysis_df = st.session_state.storage.load_analysis_log()
+
+    if analysis_df.empty:
+        st.info("No analysis log data available. Run stock analysis to generate fundamental logs.")
+        return
+
+    # Check if fundamental columns exist
+    fund_cols = [
+        'fund_eps_growth',
+        'fund_pe_reasonable',
+        'fund_debt_acceptable',
+        'fund_roe_strong',
+        'fund_cashflow_positive'
+    ]
+
+    has_fund_data = all(col in analysis_df.columns for col in fund_cols)
+
+    if not has_fund_data:
+        st.warning("Fundamental check columns not found in analysis log. Run analysis to generate data.")
+        return
+
+    st.caption(f"Showing fundamental checks for {len(analysis_df)} analyzed stocks")
+
+    # Calculate statistics
+    total_analyzed = len(analysis_df)
+
+    # Convert string values back to booleans for counting
+    def parse_bool_string(value):
+        """Convert CSV string back to boolean or None"""
+        if pd.isna(value) or value in ['None', 'N/A', '']:
+            return None
+        return value in ['True', 'TRUE', 'true']
+
+    # Overall fundamental state distribution
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        fund_pass = len(analysis_df[analysis_df['fundamental_state'] == 'PASS'])
+        st.metric("PASS", fund_pass, delta=f"{(fund_pass / total_analyzed * 100):.1f}%")
+
+    with col2:
+        fund_neutral = len(analysis_df[analysis_df['fundamental_state'] == 'NEUTRAL'])
+        st.metric("NEUTRAL", fund_neutral, delta=f"{(fund_neutral / total_analyzed * 100):.1f}%")
+
+    with col3:
+        fund_fail = len(analysis_df[analysis_df['fundamental_state'] == 'FAIL'])
+        st.metric("FAIL", fund_fail, delta=f"{(fund_fail / total_analyzed * 100):.1f}%")
+
+    # Check-by-check breakdown
+    st.markdown("**Fundamental Checks Breakdown:**")
+
+    check_stats = []
+    check_labels = {
+        'fund_eps_growth': 'EPS Growth > 10%',
+        'fund_pe_reasonable': 'P/E Reasonable',
+        'fund_debt_acceptable': 'Debt/Equity < 0.5',
+        'fund_roe_strong': 'ROE > 15%',
+        'fund_cashflow_positive': 'Cashflow Positive'
+    }
+
+    for col in fund_cols:
+        # Parse string values
+        col_values = analysis_df[col].apply(parse_bool_string)
+
+        # Count outcomes
+        true_count = col_values.apply(lambda x: x is True).sum()
+        false_count = col_values.apply(lambda x: x is False).sum()
+        none_count = col_values.apply(lambda x: x is None).sum()
+
+        available = true_count + false_count
+
+        if available > 0:
+            pass_rate = (true_count / available * 100)
+            status = '✅' if pass_rate > 60 else '⚠️' if pass_rate > 40 else '❌'
+        else:
+            pass_rate = 0
+            status = '⚪'
+
+        check_stats.append({
+            'Check': check_labels.get(col, col),
+            'Pass (✓)': true_count,
+            'Fail (✗)': false_count,
+            'No Data': none_count,
+            'Pass Rate': f"{pass_rate:.1f}%" if available > 0 else 'N/A',
+            'Status': status
+        })
+
+    if check_stats:
+        check_df = pd.DataFrame(check_stats)
+        st.dataframe(check_df, use_container_width=True, hide_index=True)
+
+        # Show interpretation
+        none_total = sum(stat['No Data'] for stat in check_stats)
+        if none_total > 0:
+            st.info(f"""
+            **📝 Data Availability:**
+            - **{none_total} "No Data" entries** across all checks indicates fundamental data source not connected
+            - Currently using NEUTRAL default (60% score) when no data available
+            - This is WORKING AS DESIGNED - system correctly logs missing data
+
+            **To enable real fundamental analysis:**
+            1. Integrate screener.in API, or
+            2. Create manual stock whitelist, or  
+            3. Connect to broker fundamental endpoints
+
+            See `analyze_fundamentals()` in `analysis_engine.py` for integration details.
+            """)
+    else:
+        st.warning("Could not parse fundamental check data")
 # ═══════════════════════════════════════════════════════════════════════════
 # RUN APP
 # ═══════════════════════════════════════════════════════════════════════════
