@@ -11,6 +11,23 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional
 from enum import Enum
+from datetime import datetime
+import pytz
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IST TIMEZONE HANDLING (CRITICAL FOR CLOUD DEPLOYMENT)
+# ═══════════════════════════════════════════════════════════════════════════
+
+IST = pytz.timezone("Asia/Kolkata")
+
+def ist_now():
+    """Get current datetime in IST (timezone-aware)"""
+    return datetime.now(IST)
+
+def ist_today():
+    """Get current date in IST"""
+    return ist_now().date()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -180,40 +197,67 @@ def analyze_fundamentals(fundamental_data: Dict) -> Tuple[FundamentalState, floa
     
     Returns: (state, score, reasons_dict)
     
-    NOTE: This is a stub - real implementation requires fundamental data source
-    For MVP, you can:
-    1. Manually maintain a whitelist of fundamentally strong stocks
-    2. Integrate with screener.in API
-    3. Use Angel One fundamental endpoints
+    Implementation Status:
+    - Current: NEUTRAL default (no fundamental data source)
+    - Phase 2: Manual whitelist of quality stocks
+    - Phase 3: API integration (screener.in, Angel One, etc.)
+    
+    Fundamental Criteria (5 checks):
+    1. EPS Growth: 3-year EPS growth > 10%
+    2. PE Reasonable: P/E < Industry average or < 25
+    3. Debt Acceptable: Debt/Equity < 0.5
+    4. ROE Strong: Return on Equity > 15%
+    5. Cashflow Positive: Operating cashflow > 0
+    
+    Scoring:
+    - PASS: 4-5 checks pass (70-100%)
+    - NEUTRAL: 2-3 checks pass (40-70%) 
+    - FAIL: 0-1 checks pass (0-40%)
     """
     
-    # STUB IMPLEMENTATION - Replace with real data
+    # DEFAULT IMPLEMENTATION - No fundamental data source yet
     if fundamental_data is None or not fundamental_data:
-        # Default to NEUTRAL if no fundamental data available
+        # Return NEUTRAL as default - allows trading but flags as incomplete
         return FundamentalState.NEUTRAL, 60.0, {
-            "eps_growth": False,
-            "pe_reasonable": False,
-            "debt_acceptable": False,
-            "roe_strong": False,
-            "cashflow_positive": False,
+            "eps_growth": None,           # Not available
+            "pe_reasonable": None,        # Not available
+            "debt_acceptable": None,      # Not available
+            "roe_strong": None,           # Not available
+            "cashflow_positive": None,    # Not available
         }
     
-    # Real implementation would look like:
+    # REAL IMPLEMENTATION - When fundamental data is available
+    # Expected data format:
+    # {
+    #   "eps_growth_3y": 15.5,     # 3-year EPS growth %
+    #   "pe": 22.5,                # Current P/E ratio
+    #   "industry_pe": 25.0,       # Industry average P/E
+    #   "debt_equity": 0.3,        # Debt to Equity ratio
+    #   "roe": 18.5,               # Return on Equity %
+    #   "operating_cashflow": 5000 # Operating cashflow (millions)
+    # }
+    
     checks = {
         "eps_growth": fundamental_data.get("eps_growth_3y", 0) > 10,
-        "pe_reasonable": fundamental_data.get("pe", 100) < fundamental_data.get("industry_pe", 25),
+        "pe_reasonable": fundamental_data.get("pe", 100) < min(
+            fundamental_data.get("industry_pe", 25), 25
+        ),
         "debt_acceptable": fundamental_data.get("debt_equity", 1.0) < 0.5,
         "roe_strong": fundamental_data.get("roe", 0) > 15,
         "cashflow_positive": fundamental_data.get("operating_cashflow", 0) > 0,
     }
     
-    score = (sum(checks.values()) / len(checks)) * 100
+    # Calculate score
+    passed = sum(1 for v in checks.values() if v)
+    total = len(checks)
+    score = (passed / total) * 100
     
-    if score >= 70:
+    # Determine state
+    if score >= 70:  # 4-5 checks passed
         state = FundamentalState.PASS
-    elif score >= 50:
+    elif score >= 40:  # 2-3 checks passed
         state = FundamentalState.NEUTRAL
-    else:
+    else:  # 0-1 checks passed
         state = FundamentalState.FAIL
     
     return state, score, checks

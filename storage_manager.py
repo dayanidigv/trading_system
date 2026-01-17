@@ -13,6 +13,22 @@ from typing import Optional, Dict
 from pathlib import Path
 from datetime import datetime
 import io
+import pytz
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IST TIMEZONE HANDLING (CRITICAL FOR CLOUD DEPLOYMENT)
+# ═══════════════════════════════════════════════════════════════════════════
+
+IST = pytz.timezone("Asia/Kolkata")
+
+def ist_now():
+    """Get current datetime in IST (timezone-aware)"""
+    return datetime.now(IST)
+
+def ist_today():
+    """Get current date in IST"""
+    return ist_now().date()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -321,6 +337,8 @@ class StorageManager:
         self.use_drive = use_drive and DRIVE_AVAILABLE
         self.drive_client = None
         self.folder_id = None
+        self.drive_available = False  # Track actual Drive availability
+        self.drive_error = None  # Store initialization error
         
         # Initialize Drive
         if self.use_drive:
@@ -329,11 +347,14 @@ class StorageManager:
                 self.folder_id = self.drive_client.get_or_create_folder(
                     self.config.DRIVE_FOLDER_NAME
                 )
+                self.drive_available = True
                 print(f"✅ Connected to Google Drive folder: {self.config.DRIVE_FOLDER_NAME}")
             except Exception as e:
+                self.drive_error = str(e)
                 print(f"⚠️  Drive initialization failed: {e}")
                 print("   Falling back to local storage only")
                 self.use_drive = False
+                self.drive_available = False
         
         # Local paths
         self.trades_path = self.config.LOCAL_CACHE_DIR / self.config.PAPER_TRADES_FILE
@@ -525,7 +546,7 @@ class StorageManager:
         """Update metadata file"""
         metadata = self._load_metadata()
         metadata[key] = value
-        metadata['last_updated'] = datetime.now().isoformat()
+        metadata['last_updated'] = ist_now().isoformat()
         
         with open(self.metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -628,19 +649,43 @@ class StorageManager:
 
 def analysis_result_to_log_entry(analysis_result) -> dict:
     """Convert AnalysisResult to log entry dictionary"""
+    
+    # Helper to convert None to 'N/A' string for CSV storage
+    def format_bool_check(value):
+        if value is None:
+            return 'N/A'
+        elif value is True:
+            return 'TRUE'
+        elif value is False:
+            return 'FALSE'
+        return 'N/A'
+    
     return {
         'date': analysis_result.date,
         'symbol': analysis_result.symbol,
         'market_state': analysis_result.market_state.value,
+        
+        # Fundamental details (expanded with proper None handling)
         'fundamental_state': analysis_result.fundamental_state.value,
         'fundamental_score': analysis_result.fundamental_score,
+        'fund_eps_growth': format_bool_check(analysis_result.fundamental_reasons.get('eps_growth')),
+        'fund_pe_reasonable': format_bool_check(analysis_result.fundamental_reasons.get('pe_reasonable')),
+        'fund_debt_acceptable': format_bool_check(analysis_result.fundamental_reasons.get('debt_acceptable')),
+        'fund_roe_strong': format_bool_check(analysis_result.fundamental_reasons.get('roe_strong')),
+        'fund_cashflow_positive': format_bool_check(analysis_result.fundamental_reasons.get('cashflow_positive')),
+        
+        # Technical states
         'trend_state': analysis_result.trend_state.value,
         'entry_state': analysis_result.entry_state.value,
         'rs_state': analysis_result.rs_state.value,
         'rs_value': analysis_result.rs_value,
         'behavior': analysis_result.behavior.value,
+        
+        # Decision
         'trade_eligible': analysis_result.trade_eligible,
         'rejection_reasons': '|'.join(analysis_result.rejection_reasons) if analysis_result.rejection_reasons else '',
+        
+        # Price data
         'close': analysis_result.close,
         'rsi': analysis_result.rsi,
         'consecutive_bars': analysis_result.consecutive_bars_above_emas,

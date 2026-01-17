@@ -13,6 +13,22 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from enum import Enum
 import uuid
+import pytz
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IST TIMEZONE HANDLING (CRITICAL FOR CLOUD DEPLOYMENT)
+# ═══════════════════════════════════════════════════════════════════════════
+
+IST = pytz.timezone("Asia/Kolkata")
+
+def ist_now():
+    """Get current datetime in IST (timezone-aware)"""
+    return datetime.now(IST)
+
+def ist_today():
+    """Get current date in IST"""
+    return ist_now().date()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

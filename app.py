@@ -14,6 +14,22 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 from typing import List, Dict
+import pytz
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# IST TIMEZONE HANDLING (CRITICAL FOR CLOUD DEPLOYMENT)
+# ═══════════════════════════════════════════════════════════════════════════
+
+IST = pytz.timezone("Asia/Kolkata")
+
+def ist_now():
+    """Get current datetime in IST (timezone-aware)"""
+    return datetime.now(IST)
+
+def ist_today():
+    """Get current date in IST"""
+    return ist_now().date()
 
 # Import our engines
 from analysis_engine import (
@@ -107,13 +123,50 @@ def load_index_data(symbol: str = BENCHMARK_INDEX) -> pd.DataFrame:
 def main():
     st.set_page_config(
         page_title="Trade Analysis & Paper Trading System",
+        page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded"
     )
     
+    # Custom CSS for better UI
+    st.markdown("""
+    <style>
+    .big-metric {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin: 0;
+    }
+    .metric-label {
+        font-size: 0.9rem;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .status-badge {
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-weight: 600;
+        display: inline-block;
+        font-size: 0.85rem;
+    }
+    .status-green { background: #00CC94; color: white; }
+    .status-red { background: #FF5252; color: white; }
+    .status-orange { background: #FF9800; color: white; }
+    .status-blue { background: #4FC3F7; color: white; }
+    .status-gray { background: #666; color: white; }
+    .card {
+        background: #1E1E1E;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #333;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Initialize session state
     if 'storage' not in st.session_state:
-        st.session_state.storage = StorageManager(use_drive=False)
+        # Drive is primary storage (cloud-first architecture)
+        st.session_state.storage = StorageManager(use_drive=True)
     
     if 'engine' not in st.session_state:
         st.session_state.engine = PaperTradeEngine(TradeConfig())
@@ -123,11 +176,31 @@ def main():
             st.session_state.engine.load_from_dataframe(trades_df)
     
     # Sidebar navigation
-    st.sidebar.title("📊 Trading System")
+    st.sidebar.markdown("""<h1 style='text-align: center; color: #00CC94;'>📊 Trading System</h1>""", unsafe_allow_html=True)
+    st.sidebar.markdown("<p style='text-align: center; color: #888; font-size: 0.85rem;'>IST-aligned • Production Ready</p>", unsafe_allow_html=True)
+    st.sidebar.markdown("---")
+    
     page = st.sidebar.radio(
-        "Navigation",
-        ["Daily Analysis", "Paper Trades", "Analytics Dashboard", "Settings"]
+        "🧭 Navigation",
+        ["Daily Analysis", "Paper Trades", "Analytics Dashboard", "Settings"],
+        label_visibility="visible"
     )
+    
+    st.sidebar.markdown("---")
+    
+    # Quick stats in sidebar
+    engine = st.session_state.engine
+    stats = engine.get_statistics()
+    
+    st.sidebar.markdown("### 📈 Quick Stats")
+    st.sidebar.metric("Total Trades", stats['total_trades'])
+    st.sidebar.metric("Open Positions", stats['open_trades'])
+    if stats['total_trades'] > 0:
+        st.sidebar.metric("Win Rate", f"{stats.get('win_rate', 0):.1f}%")
+    
+    st.sidebar.markdown("---")
+    st.sidebar.caption(f"🕐 IST: {ist_now().strftime('%I:%M %p')}")
+    st.sidebar.caption(f"📅 {ist_today().strftime('%d %b %Y')}")
     
     if page == "Daily Analysis":
         show_daily_analysis()
@@ -144,39 +217,89 @@ def main():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_daily_analysis():
-    st.title("📈 Daily Market Analysis")
-    st.caption("Analyze stocks and execute paper trades")
+    # Drive status warning
+    if st.session_state.storage.use_drive and not st.session_state.storage.drive_available:
+        st.warning("⚠️ **Google Drive not connected** - Data is being saved locally only. Check Settings for details.")
+    
+    # Header
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title("📈 Daily Market Analysis")
+        st.caption("End-of-day analysis • Forward-only testing • No hindsight bias")
+    with col2:
+        st.markdown(f"<div style='text-align: right; padding-top: 10px;'>"
+                   f"<div style='color: #888; font-size: 0.8rem;'>IST Time</div>"
+                   f"<div style='font-size: 1.2rem; font-weight: 600;'>{ist_now().strftime('%I:%M %p')}</div>"
+                   f"<div style='color: #888; font-size: 0.85rem;'>{ist_today().strftime('%d %b %Y')}</div>"
+                   f"</div>", unsafe_allow_html=True)
     
     # Load index data
     index_df = load_index_data()
     
     if index_df is None:
-        st.error("Failed to load index data. Cannot proceed with analysis.")
+        st.error("❌ Failed to load index data. Cannot proceed with analysis.")
         return
     
-    # Market State
+    # Market State with enhanced visual
     from analysis_engine import analyze_market_state
     market_state = analyze_market_state(index_df)
     
-    st.markdown(f"### Market State: **{market_state.value}**")
-    st.caption(f"Based on NIFTY 50 vs EMA50")
+    market_color = "#00CC94" if market_state.value == "RISK-ON" else "#FF5252" if market_state.value == "RISK-OFF" else "#888"
+    st.markdown(f"""
+    <div style='background: {market_color}22; padding: 15px; border-radius: 10px; border-left: 4px solid {market_color}; margin: 20px 0;'>
+        <div style='font-size: 0.85rem; color: #888; text-transform: uppercase; letter-spacing: 1px;'>Market State</div>
+        <div style='font-size: 1.8rem; font-weight: 700; color: {market_color}; margin-top: 5px;'>{market_state.value}</div>
+        <div style='font-size: 0.85rem; color: #aaa; margin-top: 5px;'>Based on NIFTY 50 vs EMA50</div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Stock selection
+    # Stock selection with enhanced UI
     st.markdown("---")
-    st.subheader("Stock Universe")
+    st.markdown("### 🎯 Stock Universe")
+    st.caption(f"Select from {len(DEFAULT_UNIVERSE)} Indian large-cap stocks • Institutionally traded")
     
-    col1, col2 = st.columns([3, 1])
+    # Quick preset selector
+    col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        selected_stocks = st.multiselect(
-            "Select stocks to analyze",
-            DEFAULT_UNIVERSE,
-            default=DEFAULT_UNIVERSE[:5]
+        quick_select = st.selectbox(
+            "Quick Presets",
+            ["Custom Selection", "Top 5", "Top 10", "IT Sector", "Banking Sector", "All Stocks"]
         )
     
     with col2:
-        if st.button("🔍 Analyze All", use_container_width=True):
-            analyze_universe(selected_stocks, index_df, market_state)
+        # Apply preset
+        if quick_select == "Top 5":
+            default_selection = DEFAULT_UNIVERSE[:5]
+        elif quick_select == "Top 10":
+            default_selection = DEFAULT_UNIVERSE[:10]
+        elif quick_select == "IT Sector":
+            default_selection = [s for s in DEFAULT_UNIVERSE if s in ["TCS.NS", "INFY.NS", "WIPRO.NS", "HCLTECH.NS", "TECHM.NS"]]
+        elif quick_select == "Banking Sector":
+            default_selection = [s for s in DEFAULT_UNIVERSE if s in ["HDFCBANK.NS", "ICICIBANK.NS", "AXISBANK.NS", "KOTAKBANK.NS", "SBIN.NS"]]
+        elif quick_select == "All Stocks":
+            default_selection = DEFAULT_UNIVERSE
+        else:
+            default_selection = DEFAULT_UNIVERSE[:5]
+        
+        st.metric("Selected", len(default_selection))
+    
+    with col3:
+        st.write("")  # Spacer
+        analyze_clicked = st.button("🔍 Analyze", use_container_width=True, type="primary")
+    
+    # Stock multiselect (full width)
+    selected_stocks = st.multiselect(
+        "Customize selection (or use preset above)",
+        DEFAULT_UNIVERSE,
+        default=default_selection
+    )
+    
+    # Execute analysis
+    if analyze_clicked and selected_stocks:
+        analyze_universe(selected_stocks, index_df, market_state)
+    elif analyze_clicked and not selected_stocks:
+        st.error("⚠️ Please select at least one stock to analyze")
     
     # Individual stock analysis
     st.markdown("---")
@@ -237,6 +360,25 @@ def analyze_universe(symbols: List[str], index_df: pd.DataFrame, market_state: M
     
     # Display summary
     display_analysis_summary(results)
+    
+    # Diagnostic: Show rejection reasons
+    if results:
+        with st.expander("🔧 Diagnostic: Rejection Breakdown"):
+            rejection_summary = {}
+            for r in results:
+                if not r.trade_eligible and r.rejection_reasons:
+                    for reason in r.rejection_reasons:
+                        rejection_summary[reason] = rejection_summary.get(reason, 0) + 1
+            
+            if rejection_summary:
+                st.markdown("**Most common rejection reasons:**")
+                rejection_df = pd.DataFrame([
+                    {"Rejection Reason": k, "Count": v, "% of Total": f"{(v/len(results)*100):.1f}%"}
+                    for k, v in sorted(rejection_summary.items(), key=lambda x: x[1], reverse=True)
+                ])
+                st.dataframe(rejection_df, use_container_width=True, hide_index=True)
+            else:
+                st.success("No rejections - all stocks passed!")
 
 
 def analyze_single_stock(symbol: str, index_df: pd.DataFrame, market_state: MarketState):
@@ -254,26 +396,38 @@ def analyze_single_stock(symbol: str, index_df: pd.DataFrame, market_state: Mark
     # Display results
     st.markdown(f"## {symbol}")
     
-    # State badges
+    # State badges with modern card design
     col1, col2, col3, col4 = st.columns(4)
     
-    with col1:
-        color = {"STRONG": "green", "DEVELOPING": "orange", "ABSENT": "red"}[result.trend_state.value]
-        st.markdown(f"<h3 style='color:{color};'>TREND: {result.trend_state.value}</h3>", unsafe_allow_html=True)
+    states_config = [
+        ("TREND", result.trend_state.value, {"STRONG": "#00CC94", "DEVELOPING": "#FF9800", "ABSENT": "#FF5252"}),
+        ("ENTRY", result.entry_state.value, {"OK": "#00CC94", "WAIT": "#FF9800", "NO": "#FF5252", "N/A": "#666"}),
+        ("RS", result.rs_state.value, {"STRONG": "#00CC94", "NEUTRAL": "#FF9800", "WEAK": "#FF5252", "N/A": "#666"}),
+        ("BEHAVIOR", result.behavior.value, {"CONTINUATION": "#00CC94", "EXPANSION": "#4FC3F7", "FAILURE": "#FF5252"}),
+    ]
     
-    with col2:
-        color = {"OK": "green", "WAIT": "orange", "NO": "red", "N/A": "gray"}[result.entry_state.value]
-        st.markdown(f"<h3 style='color:{color};'>ENTRY: {result.entry_state.value}</h3>", unsafe_allow_html=True)
+    for col, (label, value, color_map) in zip([col1, col2, col3, col4], states_config):
+        color = color_map.get(value, "#666")
+        with col:
+            st.markdown(f"""
+            <div class='card' style='text-align: center; border-left: 4px solid {color};'>
+                <div style='font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 1px;'>{label}</div>
+                <div style='font-size: 1.4rem; font-weight: 700; color: {color}; margin-top: 8px;'>{value}</div>
+            </div>
+            """, unsafe_allow_html=True)
     
-    with col3:
-        color = {"STRONG": "green", "NEUTRAL": "orange", "WEAK": "red", "N/A": "gray"}[result.rs_state.value]
-        st.markdown(f"<h3 style='color:{color};'>RS: {result.rs_state.value}</h3>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    with col4:
-        color = {"CONTINUATION": "green", "EXPANSION": "#4FC3F7", "FAILURE": "#FF5252"}[result.behavior.value]
-        st.markdown(f"<h3 style='color:{color};'>BEHAVIOR: {result.behavior.value}</h3>", unsafe_allow_html=True)
+    # Fundamental and Market context
+    fund_color = {"PASS": "#00CC94", "NEUTRAL": "#FF9800", "FAIL": "#FF5252"}.get(result.fundamental_state.value, "#666")
+    mkt_color = "#00CC94" if market_state.value == "RISK-ON" else "#FF5252" if market_state.value == "RISK-OFF" else "#666"
     
-    st.caption(f"Fundamental: {result.fundamental_state.value} | Market: {market_state.value}")
+    st.markdown(f"""
+    <div style='text-align: center; padding: 10px;'>
+        <span class='status-badge' style='background: {fund_color};'>Fundamental: {result.fundamental_state.value}</span>
+        <span class='status-badge' style='background: {mkt_color}; margin-left: 10px;'>Market: {market_state.value}</span>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Chart
     display_stock_chart(stock_df, result)
@@ -315,23 +469,106 @@ def analyze_single_stock(symbol: str, index_df: pd.DataFrame, market_state: Mark
 def display_analysis_summary(results: List[AnalysisResult]):
     """Display summary table of all analyzed stocks"""
     
-    st.markdown("### Summary")
+    st.markdown("### 📋 Analysis Summary")
     
+    # Count eligible trades
+    eligible_count = sum(1 for r in results if r.trade_eligible)
+    total_count = len(results)
+    
+    # Count by outcome
+    continuation_count = sum(1 for r in results if r.behavior.value == "CONTINUATION")
+    expansion_count = sum(1 for r in results if r.behavior.value == "EXPANSION")
+    failure_count = sum(1 for r in results if r.behavior.value == "FAILURE")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Analyzed", total_count)
+    with col2:
+        st.metric("Trade Eligible", eligible_count, delta=f"{(eligible_count/total_count*100):.0f}%" if total_count > 0 else "0%")
+    with col3:
+        st.metric("CONTINUATION", continuation_count, delta="✅ Pass" if continuation_count > 0 else None)
+    with col4:
+        st.metric("FAILURE", failure_count, delta="❌ Reject" if failure_count > 0 else None, delta_color="inverse")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Build summary table
     summary_data = []
     for r in results:
+        # Emoji indicators
+        trend_emoji = {"STRONG": "🟢", "DEVELOPING": "🟡", "ABSENT": "🔴"}[r.trend_state.value]
+        entry_emoji = {"OK": "🟢", "WAIT": "🟡", "NO": "🔴", "N/A": "⚪"}[r.entry_state.value]
+        rs_emoji = {"STRONG": "🟢", "NEUTRAL": "🟡", "WEAK": "🔴", "N/A": "⚪"}[r.rs_state.value]
+        behavior_emoji = {"CONTINUATION": "🟢", "EXPANSION": "🔵", "FAILURE": "🔴"}[r.behavior.value]
+        
         summary_data.append({
-            "Symbol": r.symbol,
-            "Trend": r.trend_state.value,
-            "Entry": r.entry_state.value,
-            "RS": r.rs_state.value,
-            "Behavior": r.behavior.value,
-            "Eligible": "✅" if r.trade_eligible else "❌",
-            "Close": f"₹{r.close:.2f}",
+            "✓": "✅" if r.trade_eligible else "❌",
+            "Symbol": r.symbol.replace(".NS", ""),
+            "Trend": f"{trend_emoji} {r.trend_state.value}",
+            "Entry": f"{entry_emoji} {r.entry_state.value}",
+            "RS": f"{rs_emoji} {r.rs_state.value}",
+            "Behavior": f"{behavior_emoji} {r.behavior.value}",
+            "Price": f"₹{r.close:.2f}",
             "RSI": f"{r.rsi:.1f}",
         })
     
     df = pd.DataFrame(summary_data)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    # Sort: eligible first, then by symbol
+    df['_sort'] = df['✓'].apply(lambda x: 0 if x == '✅' else 1)
+    df = df.sort_values(['_sort', 'Symbol']).drop('_sort', axis=1)
+    
+    # Display toggle between table and card view
+    view_mode = st.radio("View Mode", ["📊 Table View", "🗂️ Card View"], horizontal=True, label_visibility="collapsed")
+    
+    if "Table" in view_mode:
+        # Table view
+        st.dataframe(
+            df, 
+            use_container_width=True, 
+            hide_index=True, 
+            height=min(450, len(df) * 35 + 38)  # Dynamic height based on rows
+        )
+    else:
+        # Card view for better mobile/small screen experience
+        for idx, row in df.iterrows():
+            status_color = "#00CC94" if row['✓'] == '✅' else "#FF5252"
+            
+            with st.container():
+                st.markdown(f"""
+                <div style='background: #1E1E1E; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid {status_color};'>
+                    <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;'>
+                        <div style='flex: 1; min-width: 200px;'>
+                            <h3 style='margin: 0; color: {status_color};'>{row['✓']} {row['Symbol']}</h3>
+                            <p style='margin: 5px 0; color: #888; font-size: 0.9rem;'>{row['Price']} • RSI: {row['RSI']}</p>
+                        </div>
+                        <div style='display: flex; gap: 10px; flex-wrap: wrap;'>
+                            <span class='status-badge' style='background: #333;'>{row['Trend']}</span>
+                            <span class='status-badge' style='background: #333;'>{row['Entry']}</span>
+                            <span class='status-badge' style='background: #333;'>{row['RS']}</span>
+                            <span class='status-badge' style='background: #333;'>{row['Behavior']}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # Expandable rejection analysis
+    if failure_count > 0:
+        with st.expander(f"🔍 Why {failure_count} stocks failed (Behavior = FAILURE)"):
+            st.markdown("""
+            **Behavior FAILURE means:**
+            - Stock broke below EMA20 support
+            - Or showing weakness in price structure
+            - Or momentum deteriorating
+            
+            **This is NOT an error** - it's the system correctly rejecting weak setups.
+            
+            **What to do:**
+            - ✅ This is normal market filtering
+            - ✅ Wait for better setups
+            - ✅ FAILURE is a valid decision (logged for learning)
+            - ❌ Do NOT force trades when behavior fails
+            """)
 
 
 def display_stock_chart(df: pd.DataFrame, result: AnalysisResult):
@@ -385,23 +622,66 @@ def display_stock_chart(df: pd.DataFrame, result: AnalysisResult):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def show_paper_trades():
-    st.title("📝 Paper Trades")
+    st.title("📝 Paper Trading Portfolio")
+    st.caption("Forward-only simulation • No hindsight • Pure execution tracking")
     
     engine = st.session_state.engine
     
-    # Stats
+    # Stats with enhanced design
     stats = engine.get_statistics()
     
-    col1, col2, col3, col4 = st.columns(4)
+    st.markdown("### 📊 Performance Metrics")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        st.metric("Total Trades", stats['total_trades'])
+        st.markdown(f"""
+        <div class='card' style='text-align: center;'>
+            <div class='metric-label'>Total Trades</div>
+            <div class='big-metric'>{stats['total_trades']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col2:
-        st.metric("Open Trades", stats['open_trades'])
+        st.markdown(f"""
+        <div class='card' style='text-align: center; border-left: 4px solid #4FC3F7;'>
+            <div class='metric-label'>Open</div>
+            <div class='big-metric' style='color: #4FC3F7;'>{stats['open_trades']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col3:
-        st.metric("Win Rate", f"{stats.get('win_rate', 0):.1f}%")
+        wr_color = "#00CC94" if stats.get('win_rate', 0) >= 50 else "#FF9800" if stats.get('win_rate', 0) >= 40 else "#FF5252"
+        st.markdown(f"""
+        <div class='card' style='text-align: center; border-left: 4px solid {wr_color};'>
+            <div class='metric-label'>Win Rate</div>
+            <div class='big-metric' style='color: {wr_color};'>{stats.get('win_rate', 0):.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col4:
-        st.metric("Total P&L", f"₹{stats.get('total_pnl', 0):.0f}")
+        pnl = stats.get('total_pnl', 0)
+        pnl_color = "#00CC94" if pnl >= 0 else "#FF5252"
+        pnl_sign = "+" if pnl >= 0 else ""
+        st.markdown(f"""
+        <div class='card' style='text-align: center; border-left: 4px solid {pnl_color};'>
+            <div class='metric-label'>Total P&L</div>
+            <div class='big-metric' style='color: {pnl_color};'>{pnl_sign}₹{abs(pnl):.0f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col5:
+        avg_pnl = stats.get('avg_pnl_pct', 0)
+        avg_color = "#00CC94" if avg_pnl >= 0 else "#FF5252"
+        avg_sign = "+" if avg_pnl >= 0 else ""
+        st.markdown(f"""
+        <div class='card' style='text-align: center; border-left: 4px solid {avg_color};'>
+            <div class='metric-label'>Avg P&L %</div>
+            <div class='big-metric' style='color: {avg_color};'>{avg_sign}{avg_pnl:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
     
     # Tabs
     tab1, tab2 = st.tabs(["Open Trades", "Closed Trades"])
@@ -419,10 +699,12 @@ def display_open_trades():
     engine = st.session_state.engine
     
     if not engine.open_trades:
-        st.info("No open trades")
+        st.info("📭 No open trades currently. Analyze stocks to create new positions.")
         return
     
-    st.subheader("Open Positions")
+    st.markdown(f"### 📈 Open Positions ({len(engine.open_trades)})")
+    st.caption("Monitor active trades and update with current market data")
+    st.markdown("<br>", unsafe_allow_html=True)
     
     for trade in engine.open_trades:
         with st.expander(f"{trade.symbol} - Entered {trade.entry_date.date()}"):
@@ -600,6 +882,55 @@ def show_analytics():
 def show_settings():
     st.title("⚙️ Settings")
     
+    # Google Drive Status
+    st.subheader("☁️ Cloud Storage Status")
+    
+    storage = st.session_state.storage
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if storage.use_drive and storage.drive_available:
+            st.success("✅ Google Drive Connected")
+            st.caption("Primary storage: Cloud")
+        elif storage.use_drive and not storage.drive_available:
+            st.error("❌ Drive Connection Failed")
+            st.caption("Using local fallback")
+        else:
+            st.info("📁 Local Storage Only")
+            st.caption("Drive not enabled")
+    
+    with col2:
+        if storage.use_drive and storage.drive_available:
+            st.metric("Storage Mode", "Cloud-First")
+        else:
+            st.metric("Storage Mode", "Local Only")
+    
+    with col3:
+        if storage.use_drive and storage.drive_available:
+            st.metric("Sync Status", "Auto")
+        else:
+            st.metric("Sync Status", "Disabled")
+    
+    # Show error details if Drive failed
+    if storage.use_drive and not storage.drive_available:
+        st.error(f"""
+        **⚠️ Drive Connection Error:**
+        
+        ```
+        {storage.drive_error}
+        ```
+        
+        **Setup Steps:**
+        1. Check if credentials.json exists in project folder
+        2. Install: `pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib`
+        3. Verify credentials file is valid JSON
+        4. See DRIVE_SETUP.md for detailed instructions
+        5. Restart Streamlit app after fixing
+        """)
+    
+    st.markdown("---")
+    
     st.subheader("Storage Information")
     
     info = st.session_state.storage.get_storage_info()
@@ -615,6 +946,98 @@ def show_settings():
         st.metric("Analysis Log Entries", info['total_analyses'])
         st.caption(f"Trades file: {info['trades_file']}")
         st.caption(f"Log file: {info['analysis_log_file']}")
+    
+    st.markdown("---")
+    
+    st.subheader("📊 Fundamental Analysis Log")
+    
+    # Load analysis log
+    analysis_df = st.session_state.storage.load_analysis_log()
+    
+    if not analysis_df.empty and 'fund_eps_growth' in analysis_df.columns:
+        st.caption(f"Showing fundamental checks for {len(analysis_df)} analyzed stocks")
+        
+        # Calculate fundamental statistics
+        total_analyzed = len(analysis_df)
+        
+        # Check columns that exist
+        fund_cols = [col for col in ['fund_eps_growth', 'fund_pe_reasonable', 'fund_debt_acceptable', 
+                                       'fund_roe_strong', 'fund_cashflow_positive'] if col in analysis_df.columns]
+        
+        if fund_cols:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                fund_pass = len(analysis_df[analysis_df['fundamental_state'] == 'PASS'])
+                st.metric("PASS", fund_pass, delta=f"{(fund_pass/total_analyzed*100):.1f}%")
+            
+            with col2:
+                fund_neutral = len(analysis_df[analysis_df['fundamental_state'] == 'NEUTRAL'])
+                st.metric("NEUTRAL", fund_neutral, delta=f"{(fund_neutral/total_analyzed*100):.1f}%")
+            
+            with col3:
+                fund_fail = len(analysis_df[analysis_df['fundamental_state'] == 'FAIL'])
+                st.metric("FAIL", fund_fail, delta=f"{(fund_fail/total_analyzed*100):.1f}%")
+            
+            # Show check-by-check breakdown
+            st.markdown("**Fundamental Checks Breakdown:**")
+            
+            check_stats = []
+            check_labels = {
+                'fund_eps_growth': 'EPS Growth > 10%',
+                'fund_pe_reasonable': 'P/E Reasonable',
+                'fund_debt_acceptable': 'Debt/Equity < 0.5',
+                'fund_roe_strong': 'ROE > 15%',
+                'fund_cashflow_positive': 'Cashflow Positive'
+            }
+            
+            for col in fund_cols:
+                if col in analysis_df.columns:
+                    # Count string values: 'TRUE', 'FALSE', 'N/A'
+                    total = len(analysis_df)
+                    
+                    # Convert column to string and count
+                    col_values = analysis_df[col].astype(str)
+                    true_count = (col_values == 'TRUE').sum()
+                    false_count = (col_values == 'FALSE').sum()
+                    na_count = (col_values == 'N/A').sum()
+                    available = true_count + false_count
+                    
+                    if available > 0:
+                        pass_rate = (true_count / available * 100)
+                        check_stats.append({
+                            'Check': check_labels.get(col, col),
+                            'Pass': true_count,
+                            'Fail': false_count,
+                            'N/A': na_count,
+                            'Pass Rate': f"{pass_rate:.1f}%",
+                            'Status': '✅' if pass_rate > 60 else '⚠️' if pass_rate > 40 else '❌'
+                        })
+                    else:
+                        check_stats.append({
+                            'Check': check_labels.get(col, col),
+                            'Pass': 0,
+                            'Fail': 0,
+                            'N/A': na_count,
+                            'Pass Rate': 'No Data',
+                            'Status': '⚪'
+                        })
+            
+            if check_stats:
+                st.dataframe(pd.DataFrame(check_stats), use_container_width=True, hide_index=True)
+            
+            # Note about data availability
+            st.info("""
+            **📝 Note on Fundamental Data:**
+            - Currently showing NEUTRAL (60%) as default - no live fundamental data source connected
+            - Individual checks show `None` when data is unavailable
+            - To enable: Integrate screener.in API or manual stock whitelist
+            - See `analyze_fundamentals()` in analysis_engine.py for integration
+            """)
+        else:
+            st.warning("Fundamental check columns not found in analysis log. Run analysis to generate data.")
+    else:
+        st.info("No analysis log data available. Run stock analysis to generate fundamental logs.")
     
     st.markdown("---")
     
