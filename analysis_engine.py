@@ -1,0 +1,569 @@
+"""
+Core Analysis Engine
+Complete implementation of Layer-0 through Phase-2.5
+
+Design: Deterministic, explainable, production-grade
+Philosophy: Fundamentals filter, Technicals time, Behavior describes
+"""
+
+import pandas as pd
+import numpy as np
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional
+from enum import Enum
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TYPE DEFINITIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class MarketState(Enum):
+    RISK_ON = "RISK-ON"
+    RISK_OFF = "RISK-OFF"
+    UNKNOWN = "UNKNOWN"
+
+
+class FundamentalState(Enum):
+    PASS = "PASS"
+    NEUTRAL = "NEUTRAL"
+    FAIL = "FAIL"
+
+
+class TrendState(Enum):
+    STRONG = "STRONG"
+    DEVELOPING = "DEVELOPING"
+    ABSENT = "ABSENT"
+
+
+class EntryState(Enum):
+    OK = "OK"
+    WAIT = "WAIT"
+    NO = "NO"
+    NA = "N/A"
+
+
+class RSState(Enum):
+    STRONG = "STRONG"
+    NEUTRAL = "NEUTRAL"
+    WEAK = "WEAK"
+    NA = "N/A"
+
+
+class Behavior(Enum):
+    CONTINUATION = "CONTINUATION"
+    EXPANSION = "EXPANSION"
+    FAILURE = "FAILURE"
+
+
+@dataclass
+class AnalysisResult:
+    """Complete analysis output for a stock"""
+    symbol: str
+    date: pd.Timestamp
+    
+    # Layer-0: Market Context
+    market_state: MarketState
+    
+    # Layer-0.5: Fundamental Gate
+    fundamental_state: FundamentalState
+    fundamental_score: float
+    fundamental_reasons: Dict[str, bool]
+    
+    # Layer-1: Technical Analysis
+    trend_state: TrendState
+    entry_state: EntryState
+    trend_conditions: Dict[str, bool]
+    entry_conditions: Dict[str, bool]
+    
+    # Relative Strength
+    rs_state: RSState
+    rs_value: float
+    
+    # Phase-2.5: Behavior
+    behavior: Behavior
+    behavior_signals: Dict[str, bool]
+    
+    # Trend Maturity
+    consecutive_bars_above_emas: int
+    
+    # Price Data
+    close: float
+    ema20: float
+    ema50: float
+    rsi: float
+    volume: float
+    volume_avg: float
+    
+    # Trade Eligibility
+    trade_eligible: bool
+    rejection_reasons: list
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INDICATOR CALCULATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def calculate_ema(series: pd.Series, period: int) -> pd.Series:
+    """Exponential Moving Average"""
+    if len(series) < period:
+        return pd.Series(index=series.index, dtype=float)
+    return series.ewm(span=period, adjust=False).mean()
+
+
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    """Relative Strength Index"""
+    if len(series) < period + 1:
+        return pd.Series(index=series.index, dtype=float)
+    
+    delta = series.diff()
+    gain = delta.clip(lower=0).rolling(window=period).mean()
+    loss = -delta.clip(upper=0).rolling(window=period).mean()
+    rs = gain / (loss.replace(0, 1e-10))
+    
+    return 100 - (100 / (1 + rs))
+
+
+def consecutive_bars_above_emas(df: pd.DataFrame) -> int:
+    """Count consecutive bars where price > both EMAs"""
+    if 'EMA20' not in df.columns or 'EMA50' not in df.columns:
+        return 0
+    
+    mask = df["Close"] > df[["EMA20", "EMA50"]].max(axis=1)
+    count = 0
+    
+    for v in reversed(mask.values):
+        if v:
+            count += 1
+        else:
+            break
+    
+    return count
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LAYER-0: MARKET STATE (GLOBAL CONTEXT)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def analyze_market_state(index_df: pd.DataFrame) -> MarketState:
+    """
+    Detect broad risk-on / risk-off environment
+    
+    Simple initial implementation:
+    - Index above EMA50 = RISK-ON
+    - Index below EMA50 = RISK-OFF
+    """
+    if index_df is None or len(index_df) < 50:
+        return MarketState.UNKNOWN
+    
+    try:
+        index_df = index_df.copy()
+        index_df['EMA50'] = calculate_ema(index_df['Close'], 50)
+        
+        latest = index_df.iloc[-1]
+        
+        if latest['Close'] > latest['EMA50']:
+            return MarketState.RISK_ON
+        else:
+            return MarketState.RISK_OFF
+            
+    except Exception:
+        return MarketState.UNKNOWN
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LAYER-0.5: FUNDAMENTAL ANALYSIS (QUALITY GATE)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def analyze_fundamentals(fundamental_data: Dict) -> Tuple[FundamentalState, float, Dict[str, bool]]:
+    """
+    Fundamental quality filter
+    
+    Returns: (state, score, reasons_dict)
+    
+    NOTE: This is a stub - real implementation requires fundamental data source
+    For MVP, you can:
+    1. Manually maintain a whitelist of fundamentally strong stocks
+    2. Integrate with screener.in API
+    3. Use Angel One fundamental endpoints
+    """
+    
+    # STUB IMPLEMENTATION - Replace with real data
+    if fundamental_data is None or not fundamental_data:
+        # Default to NEUTRAL if no fundamental data available
+        return FundamentalState.NEUTRAL, 60.0, {
+            "eps_growth": False,
+            "pe_reasonable": False,
+            "debt_acceptable": False,
+            "roe_strong": False,
+            "cashflow_positive": False,
+        }
+    
+    # Real implementation would look like:
+    checks = {
+        "eps_growth": fundamental_data.get("eps_growth_3y", 0) > 10,
+        "pe_reasonable": fundamental_data.get("pe", 100) < fundamental_data.get("industry_pe", 25),
+        "debt_acceptable": fundamental_data.get("debt_equity", 1.0) < 0.5,
+        "roe_strong": fundamental_data.get("roe", 0) > 15,
+        "cashflow_positive": fundamental_data.get("operating_cashflow", 0) > 0,
+    }
+    
+    score = (sum(checks.values()) / len(checks)) * 100
+    
+    if score >= 70:
+        state = FundamentalState.PASS
+    elif score >= 50:
+        state = FundamentalState.NEUTRAL
+    else:
+        state = FundamentalState.FAIL
+    
+    return state, score, checks
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LAYER-1: TECHNICAL ANALYSIS (TREND + ENTRY)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def analyze_technical(df: pd.DataFrame) -> Tuple[Dict, Dict, TrendState, EntryState]:
+    """
+    Technical strength analysis
+    
+    Returns: (trend_conditions, entry_conditions, trend_state, entry_state)
+    """
+    
+    if df is None or len(df) < 50:
+        return {}, {}, TrendState.ABSENT, EntryState.NA
+    
+    # Enrich with indicators
+    df = df.copy()
+    df['EMA20'] = calculate_ema(df['Close'], 20)
+    df['EMA50'] = calculate_ema(df['Close'], 50)
+    df['RSI'] = calculate_rsi(df['Close'])
+    df['VOL_AVG_20'] = df['Volume'].rolling(20).mean()
+    
+    df = df.dropna(subset=['EMA20', 'EMA50', 'RSI', 'VOL_AVG_20'])
+    
+    if len(df) < 50:
+        return {}, {}, TrendState.ABSENT, EntryState.NA
+    
+    latest = df.iloc[-1]
+    close = latest['Close']
+    ema20 = latest['EMA20']
+    ema50 = latest['EMA50']
+    rsi_val = latest['RSI']
+    vol = latest['Volume']
+    vol_avg = latest['VOL_AVG_20']
+    
+    # Swing-low protection
+    no_swing_break = False
+    if len(df) >= 10:
+        last_5_low = df['Low'].iloc[-5:].min()
+        prev_5_low = df['Low'].iloc[-10:-5].min()
+        no_swing_break = last_5_low > prev_5_low
+    
+    # Pullback depth
+    pullback_shallow = False
+    if len(df) >= 20:
+        recent_slice = df.iloc[-20:]
+        high_idx = recent_slice['High'].idxmax()
+        high_pos = df.index.get_loc(high_idx)
+        recent_high = df.loc[high_idx, 'High']
+        
+        bars_after_high = df.iloc[high_pos:]
+        if len(bars_after_high) > 0:
+            recent_low_after_high = bars_after_high['Low'].min()
+            prior_start = max(0, high_pos - 30)
+            prior_slice = df.iloc[prior_start:high_pos]
+            
+            if len(prior_slice) > 0:
+                prior_low_approx = prior_slice['Low'].min()
+                impulse_size = recent_high - prior_low_approx
+                
+                if impulse_size > 1e-6 and recent_low_after_high < recent_high:
+                    pullback_depth = (recent_high - recent_low_after_high) / impulse_size
+                    pullback_shallow = pullback_depth <= 0.50
+    
+    # RSI regime-aware
+    rsi_trend_ok = rsi_val >= 40
+    rsi_entry_ok = 40 <= rsi_val <= 60
+    
+    # TREND CONDITIONS
+    trend_conditions = {
+        "price_above_ema20": close > ema20,
+        "ema20_above_ema50": ema20 > ema50,
+        "ema20_rising": ema20 > df['EMA20'].iloc[-5] if len(df) >= 5 else False,
+        "rsi_momentum_exists": rsi_trend_ok,
+        "no_swing_low_break": no_swing_break,
+    }
+    
+    # ENTRY CONDITIONS
+    entry_conditions = {
+        "pullback_shallow": pullback_shallow,
+        "rsi_pullback_zone": rsi_entry_ok,
+        "volume_normal": vol < vol_avg * 1.75,
+    }
+    
+    # Scoring
+    trend_score = sum(trend_conditions.values())
+    entry_score = sum(entry_conditions.values())
+    
+    # Trend State
+    if trend_score >= 4:
+        trend_state = TrendState.STRONG
+    elif trend_score >= 3:
+        trend_state = TrendState.DEVELOPING
+    else:
+        trend_state = TrendState.ABSENT
+    
+    # Entry State (only meaningful if trend exists)
+    if trend_score < 3:
+        entry_state = EntryState.NA
+    else:
+        if entry_score >= 3:
+            entry_state = EntryState.OK
+        elif entry_score >= 2:
+            entry_state = EntryState.WAIT
+        else:
+            entry_state = EntryState.NO
+    
+    return trend_conditions, entry_conditions, trend_state, entry_state
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RELATIVE STRENGTH ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def analyze_relative_strength(stock_df: pd.DataFrame, index_df: pd.DataFrame) -> Tuple[RSState, float]:
+    """
+    Calculate relative strength vs index
+    
+    Returns: (rs_state, rs_value)
+    """
+    if stock_df is None or index_df is None or len(stock_df) < 21 or len(index_df) < 21:
+        return RSState.NA, 0.0
+    
+    try:
+        stock_close = stock_df['Close'].iloc[-1]
+        stock_close_20d = stock_df['Close'].iloc[-21]
+        stock_ret = (stock_close - stock_close_20d) / stock_close_20d
+        
+        index_close = index_df['Close'].iloc[-1]
+        index_close_20d = index_df['Close'].iloc[-21]
+        index_ret = (index_close - index_close_20d) / index_close_20d
+        
+        rs_value = stock_ret - index_ret
+        
+        if rs_value > 0.02:
+            rs_state = RSState.STRONG
+        elif rs_value > -0.02:
+            rs_state = RSState.NEUTRAL
+        else:
+            rs_state = RSState.WEAK
+        
+        return rs_state, rs_value
+        
+    except Exception:
+        return RSState.NA, 0.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE-2.5: BEHAVIOR CLASSIFICATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def classify_behavior(df: pd.DataFrame, rs_state: RSState) -> Tuple[Behavior, Dict[str, bool]]:
+    """
+    Institutional behavior detection
+    
+    Returns: (behavior, signals_dict)
+    """
+    if df is None or len(df) < 20:
+        return Behavior.CONTINUATION, {}
+    
+    try:
+        latest = df.iloc[-1]
+        close = latest['Close']
+        rsi_val = latest['RSI']
+        vol = latest['Volume']
+        vol_avg = latest['VOL_AVG_20']
+        
+        # ═══ FAILURE DETECTION (Any 2 of 5) ═══
+        
+        # RSI Divergence
+        rsi_divergence = False
+        if len(df) >= 10:
+            price_higher = close > df['Close'].iloc[-10]
+            rsi_lower = rsi_val < df['RSI'].iloc[-10]
+            rsi_divergence = price_higher and rsi_lower
+        
+        # EMA20 flattening
+        ema_flat_or_down = False
+        if len(df) >= 3:
+            ema_flat_or_down = df['EMA20'].iloc[-1] <= df['EMA20'].iloc[-3]
+        
+        # Swing-low break
+        swing_low_break = False
+        if len(df) >= 10:
+            last_5_low = df['Low'].iloc[-5:].min()
+            prev_5_low = df['Low'].iloc[-10:-5].min()
+            swing_low_break = last_5_low <= prev_5_low
+        
+        # Effort without result
+        effort_no_result = False
+        if len(df) >= 2:
+            effort_no_result = (vol > vol_avg * 1.5) and (close <= df['Close'].iloc[-2])
+        
+        # RS deterioration
+        rs_weakening = rs_state == RSState.WEAK
+        
+        failure_signals = {
+            "rsi_divergence": rsi_divergence,
+            "ema_flattening": ema_flat_or_down,
+            "swing_low_break": swing_low_break,
+            "effort_no_result": effort_no_result,
+            "rs_weakening": rs_weakening,
+        }
+        
+        if sum(failure_signals.values()) >= 2:
+            return Behavior.FAILURE, failure_signals
+        
+        # ═══ EXPANSION DETECTION (3 of 4) ═══
+        
+        # Volatility compression
+        volatility_compressed = False
+        if len(df) >= 34:
+            atr = (df['High'] - df['Low']).rolling(14).mean()
+            atr_pct = atr / df['Close']
+            if len(atr_pct) >= 20:
+                current_atr = atr_pct.iloc[-1]
+                avg_atr = atr_pct.rolling(20).mean().iloc[-1]
+                volatility_compressed = current_atr < avg_atr
+        
+        # Tight range
+        range_tight = False
+        if len(df) >= 15:
+            recent_high = df['High'].iloc[-15:].max()
+            recent_low = df['Low'].iloc[-15:].min()
+            if recent_high > 0:
+                range_tight = (recent_high - recent_low) / recent_high < 0.08
+        
+        # Higher lows
+        higher_lows = False
+        if len(df) >= 6:
+            higher_lows = df['Low'].iloc[-3] > df['Low'].iloc[-6]
+        
+        # Quiet volume
+        volume_quiet = vol < vol_avg
+        
+        expansion_signals = {
+            "volatility_compressed": volatility_compressed,
+            "range_tight": range_tight,
+            "higher_lows": higher_lows,
+            "volume_quiet": volume_quiet,
+        }
+        
+        if sum(expansion_signals.values()) >= 3:
+            return Behavior.EXPANSION, {**failure_signals, **expansion_signals}
+        
+        # Default: CONTINUATION
+        return Behavior.CONTINUATION, {**failure_signals, **expansion_signals}
+        
+    except Exception:
+        return Behavior.CONTINUATION, {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN ANALYSIS ORCHESTRATOR
+# ═══════════════════════════════════════════════════════════════════════════
+
+def analyze_stock(
+    symbol: str,
+    stock_df: pd.DataFrame,
+    index_df: pd.DataFrame,
+    fundamental_data: Optional[Dict] = None,
+) -> AnalysisResult:
+    """
+    Complete end-to-end analysis of a stock
+    
+    Args:
+        symbol: Stock symbol
+        stock_df: Price data (OHLCV)
+        index_df: Index data for market state and RS
+        fundamental_data: Fundamental metrics (optional)
+    
+    Returns:
+        AnalysisResult with complete analysis
+    """
+    
+    # Layer-0: Market State
+    market_state = analyze_market_state(index_df)
+    
+    # Layer-0.5: Fundamentals
+    fund_state, fund_score, fund_reasons = analyze_fundamentals(fundamental_data)
+    
+    # Enrich stock data
+    stock_df = stock_df.copy()
+    stock_df['EMA20'] = calculate_ema(stock_df['Close'], 20)
+    stock_df['EMA50'] = calculate_ema(stock_df['Close'], 50)
+    stock_df['RSI'] = calculate_rsi(stock_df['Close'])
+    stock_df['VOL_AVG_20'] = stock_df['Volume'].rolling(20).mean()
+    stock_df = stock_df.dropna(subset=['EMA20', 'EMA50', 'RSI', 'VOL_AVG_20'])
+    
+    # Layer-1: Technical Analysis
+    trend_conds, entry_conds, trend_state, entry_state = analyze_technical(stock_df)
+    
+    # Relative Strength
+    rs_state, rs_value = analyze_relative_strength(stock_df, index_df)
+    
+    # Phase-2.5: Behavior
+    behavior, behavior_signals = classify_behavior(stock_df, rs_state)
+    
+    # Trend Maturity
+    consecutive_bars = consecutive_bars_above_emas(stock_df)
+    
+    # Extract latest values
+    latest = stock_df.iloc[-1]
+    
+    # Determine trade eligibility
+    rejection_reasons = []
+    
+    if fund_state == FundamentalState.FAIL:
+        rejection_reasons.append("Fundamental: FAIL")
+    
+    if trend_state == TrendState.ABSENT:
+        rejection_reasons.append("Trend: ABSENT")
+    
+    if entry_state not in [EntryState.OK]:
+        rejection_reasons.append(f"Entry: {entry_state.value}")
+    
+    if rs_state == RSState.WEAK:
+        rejection_reasons.append("RS: WEAK")
+    
+    if behavior == Behavior.FAILURE:
+        rejection_reasons.append("Behavior: FAILURE")
+    
+    trade_eligible = len(rejection_reasons) == 0
+    
+    return AnalysisResult(
+        symbol=symbol,
+        date=stock_df.index[-1],
+        market_state=market_state,
+        fundamental_state=fund_state,
+        fundamental_score=fund_score,
+        fundamental_reasons=fund_reasons,
+        trend_state=trend_state,
+        entry_state=entry_state,
+        trend_conditions=trend_conds,
+        entry_conditions=entry_conds,
+        rs_state=rs_state,
+        rs_value=rs_value,
+        behavior=behavior,
+        behavior_signals=behavior_signals,
+        consecutive_bars_above_emas=consecutive_bars,
+        close=float(latest['Close']),
+        ema20=float(latest['EMA20']),
+        ema50=float(latest['EMA50']),
+        rsi=float(latest['RSI']),
+        volume=float(latest['Volume']),
+        volume_avg=float(latest['VOL_AVG_20']),
+        trade_eligible=trade_eligible,
+        rejection_reasons=rejection_reasons,
+    )
