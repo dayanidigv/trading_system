@@ -648,31 +648,38 @@ class StorageManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def analysis_result_to_log_entry(analysis_result) -> dict:
-    """Convert AnalysisResult to log entry dictionary"""
+    """Convert AnalysisResult to log entry dictionary with proper None handling"""
     
-    # Helper to convert None to 'N/A' string for CSV storage
+    # Helper to convert None/bool to string for CSV storage
     def format_bool_check(value):
+        """
+        Convert boolean check results to CSV-safe strings
+        None -> 'None' (explicit no data)
+        True -> 'True' 
+        False -> 'False'
+        """
         if value is None:
-            return 'N/A'
-        elif value is True:
-            return 'TRUE'
-        elif value is False:
-            return 'FALSE'
-        return 'N/A'
+            return 'None'  # Changed from 'N/A' to 'None' for clarity
+        return str(value)  # 'True' or 'False'
+    
+    # Extract fundamental checks safely
+    fund_reasons = analysis_result.fundamental_reasons or {}
     
     return {
         'date': analysis_result.date,
         'symbol': analysis_result.symbol,
         'market_state': analysis_result.market_state.value,
         
-        # Fundamental details (expanded with proper None handling)
+        # Fundamental details (with explicit None handling)
         'fundamental_state': analysis_result.fundamental_state.value,
         'fundamental_score': analysis_result.fundamental_score,
-        'fund_eps_growth': format_bool_check(analysis_result.fundamental_reasons.get('eps_growth')),
-        'fund_pe_reasonable': format_bool_check(analysis_result.fundamental_reasons.get('pe_reasonable')),
-        'fund_debt_acceptable': format_bool_check(analysis_result.fundamental_reasons.get('debt_acceptable')),
-        'fund_roe_strong': format_bool_check(analysis_result.fundamental_reasons.get('roe_strong')),
-        'fund_cashflow_positive': format_bool_check(analysis_result.fundamental_reasons.get('cashflow_positive')),
+        
+        # Individual fundamental checks (converted to strings for CSV)
+        'fund_eps_growth': format_bool_check(fund_reasons.get('eps_growth')),
+        'fund_pe_reasonable': format_bool_check(fund_reasons.get('pe_reasonable')),
+        'fund_debt_acceptable': format_bool_check(fund_reasons.get('debt_acceptable')),
+        'fund_roe_strong': format_bool_check(fund_reasons.get('roe_strong')),
+        'fund_cashflow_positive': format_bool_check(fund_reasons.get('cashflow_positive')),
         
         # Technical states
         'trend_state': analysis_result.trend_state.value,
