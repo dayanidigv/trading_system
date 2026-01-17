@@ -1,17 +1,20 @@
 # Complete Trade Analysis & Paper Trading System
 ## Installation & Usage Guide
 
+**🎉 NEW: Google Drive Cloud Storage Enabled**
+
 ---
 
 ## 📋 **System Overview**
 
-This is a **production-grade, end-to-end trade analysis and paper trading system** designed for weekly/positional trading with Indian stocks (NSE).
+This is a **production-grade, end-to-end trade analysis and paper trading system** with **cloud persistence** designed for weekly/positional trading with Indian stocks (NSE).
 
 ### **Core Philosophy:**
 - **Fundamentals decide eligibility** (quality filter)
 - **Technicals decide timing** (structure + entry)
 - **Paper trades decide truth** (forward-only testing)
 - **Data decides improvement** (no opinions until 30+ trades)
+- **Cloud storage ensures persistence** (access from anywhere)
 
 ---
 
@@ -36,32 +39,62 @@ source trading_env/bin/activate
 ### **Step 2: Install Dependencies**
 
 ```bash
-pip install streamlit pandas numpy yfinance plotly
+# Install all dependencies including Google Drive support
+pip install -r requirements.txt
 ```
 
-### **Step 3: Project Structure**
+Or manually:
+```bash
+pip install streamlit pandas numpy yfinance plotly google-api-python-client google-auth-httplib2 google-auth-oauthlib
+```
 
-Create this folder structure:
+### **Step 3: Google Drive Setup (Required)**
+
+**📖 See [DRIVE_SETUP.md](DRIVE_SETUP.md) for complete setup guide**
+
+Quick overview:
+1. Create Google Cloud Project
+2. Enable Google Drive API
+3. Create service account
+4. Download `credentials.json`
+5. Run test: `python test_drive.py`
+
+✅ **Cloud storage ensures your data is:**
+- Accessible from any device
+- Automatically backed up
+- Safe from local failures
+- Synced in real-time
+
+### **Step 4: Project Structure**
 
 ```
 trading_system/
-├── analysis_engine.py       # Core analysis logic
-├── paper_trade_engine.py    # Trade simulation
-├── storage_manager.py       # Data persistence
-├── main_app.py             # Streamlit application
-├── data/                   # Local storage (auto-created)
-│   ├── paper_trades.csv
-│   └── analysis_log.csv
+├── credentials.json        # Google credentials (DO NOT COMMIT)
+├── analysis_engine.py      # Core analysis logic
+├── paper_trade_engine.py   # Trade simulation
+├── storage_manager.py      # Drive integration
+├── main_app.py            # Streamlit application
+├── test_drive.py          # Drive connection test
+├── requirements.txt       # Dependencies
+├── data/
+│   └── cache/            # Local cache (auto-synced)
+│       ├── paper_trades.csv
+│       ├── analysis_log.csv
+│       └── metadata.json
+├── DRIVE_SETUP.md        # Setup guide
 └── README.md
 ```
 
-### **Step 4: Copy Code Files**
+### **Step 5: Verify Setup**
 
-Copy each artifact code into its corresponding file:
-- `analysis_engine.py` → Core Analysis Engine artifact
-- `paper_trade_engine.py` → Paper Trade Engine artifact
-- `storage_manager.py` → Storage Manager artifact
-- `main_app.py` → Main Application artifact
+```bash
+# Test Google Drive connection
+python test_drive.py
+
+# Expected output:
+# ✅ Connected to Google Drive
+# ✅ All tests passed!
+```
 
 ---
 
@@ -78,11 +111,14 @@ streamlit run main_app.py
 ```
 
 The system will:
-1. Load existing trades from storage
-2. Allow you to analyze stocks
-3. Create new paper trades if rules met
-4. Update open trades with current prices
-5. Save all data to local CSV files
+1. Connect to Google Drive (cloud storage)
+2. Load existing trades from cloud
+3. Allow you to analyze stocks
+4. Create new paper trades if rules met
+5. Update open trades with current prices
+6. Auto-sync all data to Google Drive
+
+**💾 Your data is automatically saved to the cloud on every action!**
 
 ---
 
@@ -152,10 +188,17 @@ The system will:
 **Purpose:** System configuration and rules
 
 **View:**
-- Storage information
+- Storage information (Drive + Local)
 - Total trades logged
+- Cloud sync status
 - File locations
 - Locked system rules
+
+**Cloud Storage Status:**
+- Connection state
+- Last sync time
+- Drive folder location
+- Files in cloud
 
 **Discipline Lock:**
 - No rule changes until ≥30 closed trades
@@ -190,7 +233,17 @@ class TradeConfig:
     MAX_HOLDING_DAYS = 10
 ```
 
-### **3. Fundamental Data Integration**
+### **3. Storage Configuration**
+
+Edit `storage_manager.py` (advanced):
+
+```python
+class StorageConfig:
+    DRIVE_FOLDER_NAME = "TradingSystem_Data"  # Your folder name
+    # ... other settings
+```
+
+### **4. Fundamental Data Integration**
 
 The system currently uses a **stub** for fundamental analysis. To integrate real data:
 
@@ -212,53 +265,47 @@ Integrate with:
 - NSE corporate announcements
 - Yahoo Finance statistics
 
-```python
-def get_fundamental_data(symbol):
-    # Implement API call here
-    # Return dict with:
-    # - eps_growth_3y
-    # - pe, roe, debt_equity
-    # - operating_cashflow
-    pass
-```
-
 ---
 
-## 💾 **Data Storage**
+## 💾 **Data Storage Architecture**
 
-### **Local Storage (Default)**
+### **Cloud-First Design**
 
-All data saved to:
 ```
-trading_system/data/
+Your App
+   ↓
+Local Cache (Fast access)
+   ↓
+Google Drive (Cloud persistence)
+   ↓
+Accessible from any device
+```
+
+**Benefits:**
+- ✅ **Never lose data** - Cloud backup
+- ✅ **Access anywhere** - Any device with credentials
+- ✅ **Automatic sync** - No manual saves
+- ✅ **Offline capable** - Works with cached data
+- ✅ **Version safe** - Always latest state
+
+### **File Structure in Drive**
+
+Your Google Drive folder `TradingSystem_Data` contains:
+```
+TradingSystem_Data/
 ├── paper_trades.csv     # All trades (open + closed)
-└── analysis_log.csv     # Daily analysis log
+├── analysis_log.csv     # Daily analysis log
+└── metadata.json        # System metadata
 ```
 
-**Format:** Human-readable CSV  
-**Strategy:** Append-only with upsert by trade_id  
-**Backup:** Manual (copy files to backup location)
+### **Local Cache**
 
-### **Google Drive Sync (Optional)**
+Local cache in `./data/cache/` mirrors Drive for:
+- Fast access during session
+- Offline capability
+- Reduced API calls
 
-To enable cloud backup:
-
-1. **Set up Google Cloud Project:**
-   - Create project at console.cloud.google.com
-   - Enable Google Drive API
-   - Create service account
-   - Download credentials JSON
-
-2. **Install PyDrive2:**
-   ```bash
-   pip install PyDrive2
-   ```
-
-3. **Implement sync in `storage_manager.py`:**
-   ```python
-   # Uncomment and implement _sync_to_drive() method
-   # See code comments for example
-   ```
+**Cache is auto-synced on every save/load**
 
 ---
 
@@ -268,15 +315,17 @@ To enable cloud backup:
 
 **Before Market Close (3:00-3:30 PM):**
 1. Run `streamlit run main_app.py`
-2. Navigate to "Daily Analysis"
-3. Click "Analyze All" on your watchlist (10-20 stocks)
-4. Review eligible setups
-5. Create paper trades if rules met
-6. Update open trades
-7. Review Analytics (if ≥5 trades)
+2. System connects to Drive automatically
+3. Navigate to "Daily Analysis"
+4. Click "Analyze All" on your watchlist
+5. Review eligible setups
+6. Create paper trades if rules met
+7. Update open trades
+8. **Data auto-saved to cloud ✅**
+9. Review Analytics (if ≥5 trades)
 
 **Weekly Review (Saturday):**
-1. Export trades for analysis
+1. Access from any device (Drive credentials)
 2. Review closed trades
 3. Note patterns in exits
 4. Update watchlist if needed
@@ -289,29 +338,18 @@ To enable cloud backup:
 
 ---
 
-## 🎯 **Success Metrics**
-
-### **Short-Term (Weeks 1-4)**
-- ✅ System runs without errors
-- ✅ Trades logged correctly
-- ✅ Entry/exit logic executes properly
-- ✅ Data persists between sessions
-
-### **Medium-Term (Weeks 5-8)**
-- ✅ ≥20-30 closed trades
-- ✅ Consistent usage (no missed days)
-- ✅ Analysis log shows filter evolution
-- ✅ Understand behavior patterns
-
-### **Long-Term (3+ Months)**
-- ✅ ≥50-100 trades for statistical significance
-- ✅ Identify which behaviors work
-- ✅ Refine one rule at a time
-- ✅ Build intuition about setups
-
----
-
 ## 🚨 **Common Issues & Solutions**
+
+### **Issue: "Drive initialization failed"**
+**Solution:** 
+```bash
+# Verify credentials
+python test_drive.py
+
+# Check credentials.json exists
+# Ensure Drive API enabled
+# For service account: Share folder with service account email
+```
 
 ### **Issue: "Failed to load index data"**
 **Solution:** Check internet connection, try different index symbol
@@ -325,8 +363,43 @@ To enable cloud backup:
 ### **Issue: "No trades eligible"**
 **Solution:** Normal! Entry rules are strict. Expect 1-3 trades/week max.
 
-### **Issue: "Analysis log growing too large"**
-**Solution:** Archive old data (before implementing, keep full history)
+### **Issue: "Import error: google.oauth2"**
+**Solution:** 
+```bash
+pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
+```
+
+---
+
+## 🔒 **Security & Privacy**
+
+### **Protect Your Credentials**
+
+Add to `.gitignore`:
+```
+credentials.json
+token.json
+data/cache/
+*.pyc
+__pycache__/
+```
+
+### **What's Stored in Drive**
+
+- Trade data (CSV format)
+- Analysis logs (CSV format)
+- System metadata (JSON)
+
+**NOT stored:**
+- Credentials
+- Code files
+- Personal information beyond what you input
+
+### **Access Control**
+
+- Service account: Only you can access (via credentials.json)
+- OAuth: Only your Google account
+- Data encrypted in transit and at rest by Google
 
 ---
 
@@ -383,65 +456,21 @@ To enable cloud backup:
 
 ---
 
-## 🎓 **Learning Approach**
-
-### **Phase 1: Operation (Weeks 1-4)**
-- Focus: Run system correctly
-- Goal: Build habit
-- Success: Consistent daily execution
-
-### **Phase 2: Observation (Weeks 5-8)**
-- Focus: Watch patterns emerge
-- Goal: Understand behavior → outcome
-- Success: ≥30 trades logged
-
-### **Phase 3: Refinement (Month 3+)**
-- Focus: Data-driven improvements
-- Goal: Optimize one rule at a time
-- Success: Higher win rate or better R:R
-
----
-
-## 📞 **Support & Next Steps**
-
-### **If System Works Well:**
-- Continue for 6-8 weeks
-- Build trade sample (30-50 minimum)
-- Document learnings
-- Refine ONE rule at a time
-
-### **If System Needs Enhancement:**
-
-**High-Priority Additions:**
-1. Real fundamental data integration
-2. Multi-timeframe confirmation
-3. Sector rotation analysis
-4. Google Drive auto-sync
-
-**Medium-Priority:**
-1. Email/Telegram alerts
-2. Automated daily runs (GitHub Actions)
-3. Advanced analytics (drawdown, Sharpe)
-4. Volatility regime detection
-
-**Low-Priority:**
-1. Backtest module (forward-only is better)
-2. ML-based filters (premature)
-3. Real-money integration (stay paper for months)
-
----
-
 ## ✅ **Final Checklist**
 
 Before going live:
 
-- [ ] All 4 code files created
-- [ ] Dependencies installed
+- [ ] All code files created
+- [ ] Dependencies installed (`pip install -r requirements.txt`)
+- [ ] Google Drive setup complete
+- [ ] Test script passes (`python test_drive.py`)
+- [ ] See "Connected to Google Drive" message
 - [ ] System runs without errors
 - [ ] Can analyze stocks
 - [ ] Can create paper trades
 - [ ] Can update trades
-- [ ] Data persists between sessions
+- [ ] Data syncs to Drive
+- [ ] Can see files in Drive folder
 - [ ] Understand all entry rules
 - [ ] Understand all exit rules
 - [ ] Committed to 6-8 week discipline lock
@@ -455,6 +484,7 @@ This system is designed to:
 - **Learn more** (data over opinions)
 - **Improve slowly** (one rule at a time)
 - **Stay disciplined** (no emotional overrides)
+- **Never lose data** (cloud persistence)
 
 **Success = Process adherence, not immediate profits**
 
@@ -462,7 +492,49 @@ The edge comes from consistency, not complexity.
 
 ---
 
-**System Version:** 1.0  
+## 📞 **Support & Documentation**
+
+**Setup Guides:**
+- `README.md` - This file (main guide)
+- `DRIVE_SETUP.md` - Detailed Drive setup
+- `test_drive.py` - Connection verification
+
+**Key Files:**
+- `analysis_engine.py` - Analysis logic
+- `paper_trade_engine.py` - Trade management
+- `storage_manager.py` - Cloud storage
+- `main_app.py` - User interface
+
+**Data Location:**
+- Cloud: Google Drive folder `TradingSystem_Data`
+- Local: `./data/cache/` (auto-synced)
+
+---
+
+## 🚀 **Quick Start Summary**
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Setup Google Drive (see DRIVE_SETUP.md)
+# - Create Cloud project
+# - Enable Drive API
+# - Download credentials.json
+
+# 3. Test connection
+python test_drive.py
+
+# 4. Run system
+streamlit run main_app.py
+
+# 5. Start analyzing!
+```
+
+---
+
+**System Version:** 2.0 (Cloud Edition)  
 **Last Updated:** January 2026  
-**Status:** Production-Ready  
+**Status:** Production-Ready with Cloud Storage  
 **Discipline Lock:** ACTIVE
+**Storage:** Google Drive Primary
