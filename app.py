@@ -174,6 +174,10 @@ def main():
         trades_df = st.session_state.storage.load_trades()
         if not trades_df.empty:
             st.session_state.engine.load_from_dataframe(trades_df)
+        
+        # Log engine version
+        import paper_trade_engine
+        print(f"📦 PaperTradeEngine loaded: v{paper_trade_engine.__version__}")
     
     # Sidebar navigation
     st.sidebar.markdown("""<h1 style='text-align: center; color: #00CC94;'>📊 Trading System</h1>""", unsafe_allow_html=True)
@@ -201,6 +205,26 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"🕐 IST: {ist_now().strftime('%I:%M %p')}")
     st.sidebar.caption(f"📅 {ist_today().strftime('%d %b %Y')}")
+    
+    # Debug: Show module version
+    import paper_trade_engine
+    st.sidebar.caption(f"🔧 Engine v{paper_trade_engine.__version__}")
+    
+    # Force reload button for debugging
+    if st.sidebar.button("🔄 Force Reload Modules", help="Clear cache and reload trade engine"):
+        st.cache_data.clear()
+        # Force reimport
+        import importlib
+        import sys
+        if 'paper_trade_engine' in sys.modules:
+            importlib.reload(sys.modules['paper_trade_engine'])
+        if 'analysis_engine' in sys.modules:
+            importlib.reload(sys.modules['analysis_engine'])
+        # Reset engine
+        if 'engine' in st.session_state:
+            del st.session_state.engine
+        st.success("✅ Modules reloaded! App will restart.")
+        st.rerun()
     
     if page == "Daily Analysis":
         show_daily_analysis()

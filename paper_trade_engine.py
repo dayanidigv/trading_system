@@ -6,6 +6,9 @@ Design: No hindsight, no optimization, pure forward testing
 Philosophy: Data decides truth, not opinions
 """
 
+# Version tracking for cache busting
+__version__ = "2.0.0"  # Updated: Fixed create_trade to use trade_eligible flag
+
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass, asdict
