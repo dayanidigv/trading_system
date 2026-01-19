@@ -378,7 +378,20 @@ class PaperTradeEngine:
         if not trades:
             return pd.DataFrame()
         
-        return pd.DataFrame([asdict(t) for t in trades])
+        # Convert to dict and ensure enums are saved as their value strings
+        records = []
+        for trade in trades:
+            trade_dict = asdict(trade)
+            # Convert enum values to just their name (e.g., 'OPEN' instead of 'TradeStatus.OPEN')
+            if isinstance(trade.status, TradeStatus):
+                trade_dict['status'] = trade.status.value
+            if isinstance(trade.exit_reason, ExitReason):
+                trade_dict['exit_reason'] = trade.exit_reason.value
+            if isinstance(trade.outcome, TradeOutcome):
+                trade_dict['outcome'] = trade.outcome.value
+            records.append(trade_dict)
+        
+        return pd.DataFrame(records)
     
     def load_from_dataframe(self, df: pd.DataFrame):
         """Load trades from DataFrame (for persistence)"""
@@ -386,22 +399,37 @@ class PaperTradeEngine:
         if df.empty:
             return
         
+        def parse_enum_value(enum_class, value):
+            """Parse enum value handling both 'VALUE' and 'EnumClass.VALUE' formats"""
+            if pd.isna(value) or value == '':
+                return None
+            
+            value_str = str(value)
+            
+            # Handle 'EnumClass.VALUE' format (strip prefix)
+            if '.' in value_str:
+                value_str = value_str.split('.')[-1]
+            
+            try:
+                return enum_class[value_str]
+            except KeyError:
+                # If parsing fails, return None or default
+                return None
+        
         for _, row in df.iterrows():
             # Parse status enum
-            status = TradeStatus[row['status']] if isinstance(row['status'], str) else row['status']
+            status = parse_enum_value(TradeStatus, row['status'])
+            if status is None:
+                status = TradeStatus.OPEN  # Default for safety
             
             # Parse exit_reason and outcome enums (handle PENDING for open trades)
-            exit_reason_value = row['exit_reason']
-            if pd.isna(exit_reason_value) or exit_reason_value == '' or exit_reason_value == 'PENDING':
+            exit_reason = parse_enum_value(ExitReason, row['exit_reason'])
+            if exit_reason is None:
                 exit_reason = ExitReason.PENDING
-            else:
-                exit_reason = ExitReason[exit_reason_value] if isinstance(exit_reason_value, str) else exit_reason_value
             
-            outcome_value = row['outcome']
-            if pd.isna(outcome_value) or outcome_value == '' or outcome_value == 'PENDING':
+            outcome = parse_enum_value(TradeOutcome, row['outcome'])
+            if outcome is None:
                 outcome = TradeOutcome.PENDING
-            else:
-                outcome = TradeOutcome[outcome_value] if isinstance(outcome_value, str) else outcome_value
             
             trade = PaperTrade(
                 trade_id=row['trade_id'],
