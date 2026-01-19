@@ -343,22 +343,43 @@ def analyze_universe(symbols: List[str], index_df: pd.DataFrame, market_state: M
         # Check for new trade entry
         if result.trade_eligible:
             try:
-                trade = st.session_state.engine.create_trade(result)
+                # Show what we're attempting
+                with st.spinner(f"Creating trade for {symbol}..."):
+                    trade = st.session_state.engine.create_trade(result)
+                
                 if trade:
                     st.success(f"✅ New paper trade created: {symbol} (ID: {trade.trade_id})")
+                    st.info(f"📊 Entry: ₹{trade.entry_price:.2f} | Stop: ₹{trade.stop_loss:.2f} | Target: ₹{trade.target:.2f}")
                 else:
-                    st.warning(f"⚠️ {symbol} is trade eligible but create_trade returned None")
-                    # Show debug info
-                    with st.expander(f"Debug info for {symbol}"):
-                        st.write("Analysis Result:")
+                    st.error(f"⚠️ {symbol} is trade eligible but create_trade returned None")
+                    st.error("🔍 **This indicates a bug in create_trade() method**")
+                    
+                    # Show comprehensive debug info
+                    st.markdown("### Debug Information")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Analysis Result:**")
+                        st.write(f"- Symbol: {result.symbol}")
+                        st.write(f"- Date: {result.date}")
                         st.write(f"- trade_eligible: {result.trade_eligible}")
                         st.write(f"- rejection_reasons: {result.rejection_reasons}")
-                        st.write(f"- trend_state: {result.trend_state.value}")
-                        st.write(f"- entry_state: {result.entry_state.value}")
-                        st.write(f"- rs_state: {result.rs_state.value}")
-                        st.write(f"- behavior: {result.behavior.value}")
-                        st.write(f"- close: {result.close}")
-                        st.caption("Check terminal output for detailed error logs")
+                        st.write(f"- close: ₹{result.close:.2f}")
+                    
+                    with col2:
+                        st.markdown("**Entry Criteria:**")
+                        st.write(f"- Fundamental: {result.fundamental_state.value}")
+                        st.write(f"- Trend: {result.trend_state.value}")
+                        st.write(f"- Entry: {result.entry_state.value}")
+                        st.write(f"- RS: {result.rs_state.value}")
+                        st.write(f"- Behavior: {result.behavior.value}")
+                    
+                    st.markdown("**Engine State:**")
+                    st.write(f"- Open trades: {len(st.session_state.engine.open_trades)}")
+                    st.write(f"- Closed trades: {len(st.session_state.engine.closed_trades)}")
+                    
+                    st.warning("⚠️ Check Streamlit logs/terminal for detailed error messages with 🔍 emoji")
+                    
             except Exception as e:
                 st.error(f"❌ Error creating trade for {symbol}: {str(e)}")
                 import traceback
