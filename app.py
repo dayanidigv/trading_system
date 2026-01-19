@@ -91,29 +91,73 @@ BENCHMARK_INDEX = "^NSEI"  # NIFTY 50
 
 @st.cache_data(ttl=3600)
 def load_stock_data(symbol: str, period: str = "6mo") -> pd.DataFrame:
-    """Load stock price data"""
-    try:
-        df = yf.download(symbol, period=period, interval="1d", auto_adjust=True, progress=False)
-        
-        if df.empty:
-            return None
-        
-        # Handle MultiIndex
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.droplevel(1)
-        
-        df.columns = [col if isinstance(col, str) else col[0] for col in df.columns]
-        
-        return df
-    except Exception as e:
-        st.error(f"Error loading {symbol}: {e}")
-        return None
+    """Load stock price data with retry logic"""
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            df = yf.download(symbol, period=period, interval="1d", auto_adjust=True, progress=False)
+            
+            if df.empty:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ Empty data for {symbol}, retry {attempt + 1}/{max_retries}")
+                    import time
+                    time.sleep(retry_delay)
+                    continue
+                return None
+            
+            # Handle MultiIndex
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+            
+            df.columns = [col if isinstance(col, str) else col[0] for col in df.columns]
+            
+            print(f"✅ Loaded {len(df)} rows for {symbol}")
+            return df
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"⚠️ Error loading {symbol} (attempt {attempt + 1}/{max_retries}): {e}")
+                import time
+                time.sleep(retry_delay)
+            else:
+                st.error(f"❌ Failed to load {symbol} after {max_retries} attempts: {e}")
+                return None
+    
+    return None
 
 
 @st.cache_data(ttl=3600)
 def load_index_data(symbol: str = BENCHMARK_INDEX) -> pd.DataFrame:
-    """Load benchmark index data"""
-    return load_stock_data(symbol)
+    """Load benchmark index data with fallback"""
+    print(f"📊 Loading index data: {symbol}")
+    
+    # Try primary symbol
+    df = load_stock_data(symbol)
+    
+    if df is None or df.empty:
+        # Fallback: Try alternate symbol format
+        alt_symbol = "^NSEI" if symbol != "^NSEI" else "NIFTY50.NS"
+        print(f"⚠️ Primary index failed, trying fallback: {alt_symbol}")
+        df = load_stock_data(alt_symbol)
+    
+    if df is None or df.empty:
+        st.error(f"""
+        ❌ **Failed to load index data from Yahoo Finance**
+        
+        Possible reasons:
+        - Network connectivity issues
+        - Yahoo Finance API temporarily unavailable
+        - Rate limiting
+        
+        **Solutions:**
+        1. Wait 1-2 minutes and try again
+        2. Check your internet connection
+        3. Try clearing cache with "Force Reload Modules" button
+        """)
+    
+    return df
 
 
 # ═══════════════════════════════════════════════════════════════════════════
