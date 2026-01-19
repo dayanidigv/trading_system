@@ -404,63 +404,75 @@ class PaperTradeEngine:
             if pd.isna(value) or value == '':
                 return None
             
-            value_str = str(value)
+            value_str = str(value).strip()
             
             # Handle 'EnumClass.VALUE' format (strip prefix)
             if '.' in value_str:
                 value_str = value_str.split('.')[-1]
             
+            # Also handle 'EnumClass(VALUE)' format
+            if '(' in value_str and ')' in value_str:
+                value_str = value_str.split('(')[1].split(')')[0]
+            
             try:
                 return enum_class[value_str]
             except KeyError:
-                # If parsing fails, return None or default
+                print(f"⚠️ Could not parse {enum_class.__name__} value: '{value}' -> '{value_str}'")
                 return None
         
-        for _, row in df.iterrows():
-            # Parse status enum
-            status = parse_enum_value(TradeStatus, row['status'])
-            if status is None:
-                status = TradeStatus.OPEN  # Default for safety
-            
-            # Parse exit_reason and outcome enums (handle PENDING for open trades)
-            exit_reason = parse_enum_value(ExitReason, row['exit_reason'])
-            if exit_reason is None:
-                exit_reason = ExitReason.PENDING
-            
-            outcome = parse_enum_value(TradeOutcome, row['outcome'])
-            if outcome is None:
-                outcome = TradeOutcome.PENDING
-            
-            trade = PaperTrade(
-                trade_id=row['trade_id'],
-                symbol=row['symbol'],
-                entry_date=pd.Timestamp(row['entry_date']),
-                entry_price=float(row['entry_price']),
-                shares=int(row['shares']),
-                position_value=float(row['position_value']),
-                stop_loss=float(row['stop_loss']),
-                target=float(row['target']),
-                max_holding_days=int(row['max_holding_days']),
-                trend_state=str(row['trend_state']),
-                entry_state=str(row['entry_state']),
-                rs_state=str(row['rs_state']),
-                behavior=str(row['behavior']),
-                market_state=str(row['market_state']),
-                fundamental_state=str(row['fundamental_state']),
-                status=status,
-                exit_date=pd.Timestamp(row['exit_date']) if pd.notna(row['exit_date']) else None,
-                exit_price=float(row['exit_price']) if pd.notna(row['exit_price']) else None,
-                exit_reason=exit_reason,
-                outcome=outcome,
-                pnl=float(row['pnl']),
-                pnl_pct=float(row['pnl_pct']),
-                holding_days=int(row['holding_days']),
-                mfe=float(row['mfe']),
-                mae=float(row['mae']),
-                notes=str(row['notes']) if pd.notna(row['notes']) else "",
-            )
-            
-            if trade.status == TradeStatus.OPEN:
-                self.open_trades.append(trade)
-            else:
-                self.closed_trades.append(trade)
+        try:
+            for idx, row in df.iterrows():
+                # Parse status enum
+                status = parse_enum_value(TradeStatus, row['status'])
+                if status is None:
+                    print(f"⚠️ Row {idx}: Invalid status '{row['status']}', defaulting to OPEN")
+                    status = TradeStatus.OPEN  # Default for safety
+                
+                # Parse exit_reason and outcome enums (handle PENDING for open trades)
+                exit_reason = parse_enum_value(ExitReason, row['exit_reason'])
+                if exit_reason is None:
+                    exit_reason = ExitReason.PENDING
+                
+                outcome = parse_enum_value(TradeOutcome, row['outcome'])
+                if outcome is None:
+                    outcome = TradeOutcome.PENDING
+                
+                trade = PaperTrade(
+                    trade_id=row['trade_id'],
+                    symbol=row['symbol'],
+                    entry_date=pd.Timestamp(row['entry_date']),
+                    entry_price=float(row['entry_price']),
+                    shares=int(row['shares']),
+                    position_value=float(row['position_value']),
+                    stop_loss=float(row['stop_loss']),
+                    target=float(row['target']),
+                    max_holding_days=int(row['max_holding_days']),
+                    trend_state=str(row['trend_state']),
+                    entry_state=str(row['entry_state']),
+                    rs_state=str(row['rs_state']),
+                    behavior=str(row['behavior']),
+                    market_state=str(row['market_state']),
+                    fundamental_state=str(row['fundamental_state']),
+                    status=status,
+                    exit_date=pd.Timestamp(row['exit_date']) if pd.notna(row['exit_date']) else None,
+                    exit_price=float(row['exit_price']) if pd.notna(row['exit_price']) else None,
+                    exit_reason=exit_reason,
+                    outcome=outcome,
+                    pnl=float(row['pnl']),
+                    pnl_pct=float(row['pnl_pct']),
+                    holding_days=int(row['holding_days']),
+                    mfe=float(row['mfe']),
+                    mae=float(row['mae']),
+                    notes=str(row['notes']) if pd.notna(row['notes']) else "",
+                )
+                
+                if trade.status == TradeStatus.OPEN:
+                    self.open_trades.append(trade)
+                else:
+                    self.closed_trades.append(trade)
+        
+        except Exception as e:
+            print(f"❌ Error loading trades from dataframe: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
