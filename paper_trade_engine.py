@@ -387,33 +387,49 @@ class PaperTradeEngine:
             return
         
         for _, row in df.iterrows():
+            # Parse status enum
+            status = TradeStatus[row['status']] if isinstance(row['status'], str) else row['status']
+            
+            # Parse exit_reason and outcome enums (handle PENDING for open trades)
+            exit_reason_value = row['exit_reason']
+            if pd.isna(exit_reason_value) or exit_reason_value == '' or exit_reason_value == 'PENDING':
+                exit_reason = ExitReason.PENDING
+            else:
+                exit_reason = ExitReason[exit_reason_value] if isinstance(exit_reason_value, str) else exit_reason_value
+            
+            outcome_value = row['outcome']
+            if pd.isna(outcome_value) or outcome_value == '' or outcome_value == 'PENDING':
+                outcome = TradeOutcome.PENDING
+            else:
+                outcome = TradeOutcome[outcome_value] if isinstance(outcome_value, str) else outcome_value
+            
             trade = PaperTrade(
                 trade_id=row['trade_id'],
                 symbol=row['symbol'],
                 entry_date=pd.Timestamp(row['entry_date']),
-                entry_price=row['entry_price'],
-                shares=row['shares'],
-                position_value=row['position_value'],
-                stop_loss=row['stop_loss'],
-                target=row['target'],
-                max_holding_days=row['max_holding_days'],
-                trend_state=row['trend_state'],
-                entry_state=row['entry_state'],
-                rs_state=row['rs_state'],
-                behavior=row['behavior'],
-                market_state=row['market_state'],
-                fundamental_state=row['fundamental_state'],
-                status=TradeStatus[row['status']],
+                entry_price=float(row['entry_price']),
+                shares=int(row['shares']),
+                position_value=float(row['position_value']),
+                stop_loss=float(row['stop_loss']),
+                target=float(row['target']),
+                max_holding_days=int(row['max_holding_days']),
+                trend_state=str(row['trend_state']),
+                entry_state=str(row['entry_state']),
+                rs_state=str(row['rs_state']),
+                behavior=str(row['behavior']),
+                market_state=str(row['market_state']),
+                fundamental_state=str(row['fundamental_state']),
+                status=status,
                 exit_date=pd.Timestamp(row['exit_date']) if pd.notna(row['exit_date']) else None,
-                exit_price=row['exit_price'] if pd.notna(row['exit_price']) else None,
-                exit_reason=ExitReason[row['exit_reason']],
-                outcome=TradeOutcome[row['outcome']],
-                pnl=row['pnl'],
-                pnl_pct=row['pnl_pct'],
-                holding_days=row['holding_days'],
-                mfe=row['mfe'],
-                mae=row['mae'],
-                notes=row['notes'] if pd.notna(row['notes']) else "",
+                exit_price=float(row['exit_price']) if pd.notna(row['exit_price']) else None,
+                exit_reason=exit_reason,
+                outcome=outcome,
+                pnl=float(row['pnl']),
+                pnl_pct=float(row['pnl_pct']),
+                holding_days=int(row['holding_days']),
+                mfe=float(row['mfe']),
+                mae=float(row['mae']),
+                notes=str(row['notes']) if pd.notna(row['notes']) else "",
             )
             
             if trade.status == TradeStatus.OPEN:
