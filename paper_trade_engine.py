@@ -171,11 +171,18 @@ class PaperTradeEngine:
         Returns:
             PaperTrade if entry allowed, None otherwise
         """
-        print(f"Attempting trade creation for {analysis_result}...")
+        
+        # Debug logging
+        print(f"🔍 create_trade called for {analysis_result.symbol}")
+        print(f"   trade_eligible: {analysis_result.trade_eligible}")
+        
         # Use the trade_eligible flag from analysis result
         if not analysis_result.trade_eligible:
             print(f"❌ Trade creation rejected for {analysis_result.symbol}: trade_eligible=False")
+            print(f"   rejection_reasons: {analysis_result.rejection_reasons}")
             return None
+        
+        print(f"✅ Entry rules passed for {analysis_result.symbol}, creating trade...")
         
         try:
             # Calculate position size
@@ -185,6 +192,9 @@ class PaperTradeEngine:
             # Calculate stop and target
             stop_loss = analysis_result.close * (1 - self.config.STOP_LOSS_PCT)
             target = analysis_result.close * (1 + self.config.TARGET_PCT)
+            
+            print(f"   Entry: ₹{analysis_result.close:.2f}, Stop: ₹{stop_loss:.2f}, Target: ₹{target:.2f}")
+            print(f"   Position: {shares} shares = ₹{position_value:.2f}")
             
             trade = PaperTrade(
                 trade_id=str(uuid.uuid4())[:8],
@@ -206,7 +216,7 @@ class PaperTradeEngine:
             )
             
             self.open_trades.append(trade)
-            print(f"✅ Trade created for {analysis_result.symbol}: {trade.trade_id}")
+            print(f"✅ Trade created successfully: {analysis_result.symbol} [{trade.trade_id}]")
             return trade
             
         except Exception as e:
