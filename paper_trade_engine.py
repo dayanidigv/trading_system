@@ -171,39 +171,49 @@ class PaperTradeEngine:
         Returns:
             PaperTrade if entry allowed, None otherwise
         """
-        
-        if not self.config.entry_allowed(analysis_result):
+        print(f"Attempting trade creation for {analysis_result}...")
+        # Use the trade_eligible flag from analysis result
+        if not analysis_result.trade_eligible:
+            print(f"❌ Trade creation rejected for {analysis_result.symbol}: trade_eligible=False")
             return None
         
-        # Calculate position size
-        shares = int(self.config.DEFAULT_POSITION_VALUE / analysis_result.close)
-        position_value = shares * analysis_result.close
-        
-        # Calculate stop and target
-        stop_loss = analysis_result.close * (1 - self.config.STOP_LOSS_PCT)
-        target = analysis_result.close * (1 + self.config.TARGET_PCT)
-        
-        trade = PaperTrade(
-            trade_id=str(uuid.uuid4())[:8],
-            symbol=analysis_result.symbol,
-            entry_date=analysis_result.date,
-            entry_price=analysis_result.close,
-            shares=shares,
-            position_value=position_value,
-            stop_loss=stop_loss,
-            target=target,
-            max_holding_days=self.config.MAX_HOLDING_DAYS,
-            trend_state=analysis_result.trend_state.value,
-            entry_state=analysis_result.entry_state.value,
-            rs_state=analysis_result.rs_state.value,
-            behavior=analysis_result.behavior.value,
-            market_state=analysis_result.market_state.value,
-            fundamental_state=analysis_result.fundamental_state.value,
-            status=TradeStatus.OPEN,
-        )
-        
-        self.open_trades.append(trade)
-        return trade
+        try:
+            # Calculate position size
+            shares = int(self.config.DEFAULT_POSITION_VALUE / analysis_result.close)
+            position_value = shares * analysis_result.close
+            
+            # Calculate stop and target
+            stop_loss = analysis_result.close * (1 - self.config.STOP_LOSS_PCT)
+            target = analysis_result.close * (1 + self.config.TARGET_PCT)
+            
+            trade = PaperTrade(
+                trade_id=str(uuid.uuid4())[:8],
+                symbol=analysis_result.symbol,
+                entry_date=analysis_result.date,
+                entry_price=analysis_result.close,
+                shares=shares,
+                position_value=position_value,
+                stop_loss=stop_loss,
+                target=target,
+                max_holding_days=self.config.MAX_HOLDING_DAYS,
+                trend_state=analysis_result.trend_state.value,
+                entry_state=analysis_result.entry_state.value,
+                rs_state=analysis_result.rs_state.value,
+                behavior=analysis_result.behavior.value,
+                market_state=analysis_result.market_state.value,
+                fundamental_state=analysis_result.fundamental_state.value,
+                status=TradeStatus.OPEN,
+            )
+            
+            self.open_trades.append(trade)
+            print(f"✅ Trade created for {analysis_result.symbol}: {trade.trade_id}")
+            return trade
+            
+        except Exception as e:
+            print(f"❌ Exception creating trade for {analysis_result.symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def update_trade(
         self, 

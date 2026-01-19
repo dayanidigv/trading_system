@@ -69,7 +69,7 @@ DEFAULT_UNIVERSE = [
     "LT.NS", "ULTRACEMCO.NS", "GRASIM.NS",
 
     # Auto
-    "MARUTI.NS", "TATAMOTORS.NS", "M&M.NS",
+    "MARUTI.NS" "M&M.NS",
 
     # Pharma / Healthcare
     "SUNPHARMA.NS", "DRREDDY.NS", "CIPLA.NS",
@@ -307,7 +307,7 @@ def show_daily_analysis():
     
     stock_to_analyze = st.selectbox("Select stock for detailed view", selected_stocks if selected_stocks else DEFAULT_UNIVERSE)
     
-    if st.button("Analyze Stock"):
+    if st.button("Analyze Stock", key="analyze_single_btn"):
         analyze_single_stock(stock_to_analyze, index_df, market_state)
 
 
@@ -342,9 +342,27 @@ def analyze_universe(symbols: List[str], index_df: pd.DataFrame, market_state: M
         
         # Check for new trade entry
         if result.trade_eligible:
-            trade = st.session_state.engine.create_trade(result)
-            if trade:
-                st.success(f"✅ New paper trade created: {symbol}")
+            try:
+                trade = st.session_state.engine.create_trade(result)
+                if trade:
+                    st.success(f"✅ New paper trade created: {symbol} (ID: {trade.trade_id})")
+                else:
+                    st.warning(f"⚠️ {symbol} is trade eligible but create_trade returned None")
+                    # Show debug info
+                    with st.expander(f"Debug info for {symbol}"):
+                        st.write("Analysis Result:")
+                        st.write(f"- trade_eligible: {result.trade_eligible}")
+                        st.write(f"- rejection_reasons: {result.rejection_reasons}")
+                        st.write(f"- trend_state: {result.trend_state.value}")
+                        st.write(f"- entry_state: {result.entry_state.value}")
+                        st.write(f"- rs_state: {result.rs_state.value}")
+                        st.write(f"- behavior: {result.behavior.value}")
+                        st.write(f"- close: {result.close}")
+                        st.caption("Check terminal output for detailed error logs")
+            except Exception as e:
+                st.error(f"❌ Error creating trade for {symbol}: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
     
     status_text.text("Analysis complete!")
     progress_bar.empty()
@@ -451,16 +469,54 @@ def analyze_single_stock(symbol: str, index_df: pd.DataFrame, market_state: Mark
         })
         st.dataframe(entry_df, hide_index=True, use_container_width=True)
     
+    # Debug info expander
+    with st.expander("🔧 Debug Info"):
+        st.caption("Engine Status")
+        st.write(f"Open trades in engine: {len(st.session_state.engine.open_trades)}")
+        st.write(f"Closed trades in engine: {len(st.session_state.engine.closed_trades)}")
+        st.caption("Analysis Result")
+        st.write(f"trade_eligible: {result.trade_eligible}")
+        st.write(f"rejection_reasons: {result.rejection_reasons}")
+        if st.session_state.engine.open_trades:
+            st.caption("Current Open Trades:")
+            for t in st.session_state.engine.open_trades:
+                st.write(f"- {t.symbol}: {t.trade_id} (entered {t.entry_date.date()})")
+    
     # Trade eligibility
     if result.trade_eligible:
         st.success("✅ **TRADE ELIGIBLE** - All entry rules met")
-        if st.button("Create Paper Trade"):
-            trade = st.session_state.engine.create_trade(result)
-            if trade:
-                st.success(f"Paper trade created: {trade.trade_id}")
-                # Save
-                trades_df = st.session_state.engine.to_dataframe(include_open=True)
-                st.session_state.storage.save_trades(trades_df)
+        
+        # Check if trade was just created (to show persistent success message)
+        if f"trade_created_{result.symbol}" in st.session_state:
+            st.success(f"✅ Paper trade created: {st.session_state[f'trade_created_{result.symbol}']}")
+            if st.button("Clear Message", key=f"clear_{result.symbol}"):
+                del st.session_state[f"trade_created_{result.symbol}"]
+                st.rerun()
+        elif st.button("Create Paper Trade", type="primary"):
+            try:
+                trade = st.session_state.engine.create_trade(result)
+                if trade:
+                    # Save immediately
+                    trades_df = st.session_state.engine.to_dataframe(include_open=True)
+                    save_success = st.session_state.storage.save_trades(trades_df)
+                    
+                    # Store success in session state
+                    st.session_state[f"trade_created_{result.symbol}"] = trade.trade_id
+                    
+                    if save_success:
+                        st.success(f"✅ Paper trade created and saved: {trade.trade_id}")
+                    else:
+                        st.warning(f"⚠️ Trade created ({trade.trade_id}) but save failed - check storage")
+                    
+                    # Rerun to show persistent message
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to create trade - trade_eligible is True but create_trade returned None")
+                    st.caption("This shouldn't happen. Check logs.")
+            except Exception as e:
+                st.error(f"❌ Error creating trade: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
     else:
         st.warning("❌ **NOT ELIGIBLE** - Entry rules not met")
         st.caption(f"Reasons: {', '.join(result.rejection_reasons)}")
