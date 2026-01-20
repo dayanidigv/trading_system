@@ -1,2 +1,0 @@
-trade_id,symbol,entry_date,entry_price,shares,position_value,stop_loss,target,max_holding_days,trend_state,entry_state,rs_state,behavior,market_state,fundamental_state,status,exit_date,exit_price,exit_reason,outcome,pnl,pnl_pct,holding_days,mfe,mae,notes
-6192a522,ONGC.NS,2026-01-19,243.11000061035156,411,99918.21025085449,230.95450057983396,267.42100067138676,10,STRONG,OK,STRONG,EXPANSION,RISK-OFF,NEUTRAL,TradeStatus.OPEN,,,ExitReason.PENDING,TradeOutcome.PENDING,0.0,0.0,0,0.0,0.0,

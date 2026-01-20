@@ -537,6 +537,13 @@ def analyze_stock(
         AnalysisResult with complete analysis
     """
     
+    # Validate input data
+    if stock_df.empty or len(stock_df) < 50:
+        raise ValueError(f"Insufficient data for {symbol}: {len(stock_df)} rows (need at least 50)")
+    
+    if index_df.empty or len(index_df) < 50:
+        raise ValueError(f"Insufficient index data: {len(index_df)} rows (need at least 50)")
+    
     # Layer-0: Market State
     market_state = analyze_market_state(index_df)
     
@@ -550,6 +557,10 @@ def analyze_stock(
     stock_df['RSI'] = calculate_rsi(stock_df['Close'])
     stock_df['VOL_AVG_20'] = stock_df['Volume'].rolling(20).mean()
     stock_df = stock_df.dropna(subset=['EMA20', 'EMA50', 'RSI', 'VOL_AVG_20'])
+    
+    # Validate enriched data
+    if stock_df.empty:
+        raise ValueError(f"No data remaining after indicator calculation for {symbol}")
     
     # Layer-1: Technical Analysis
     trend_conds, entry_conds, trend_state, entry_state = analyze_technical(stock_df)

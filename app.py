@@ -417,7 +417,12 @@ def analyze_universe(symbols: List[str], index_df: pd.DataFrame, market_state: M
             continue
         
         # Analyze
-        result = analyze_stock(symbol, stock_df, index_df, fundamental_data=None)
+        try:
+            result = analyze_stock(symbol, stock_df, index_df, fundamental_data=None)
+        except Exception as e:
+            st.warning(f"⚠️ Analysis failed for {symbol}: {str(e)}")
+            continue
+            
         results.append(result)
         
         # Log analysis
@@ -514,7 +519,11 @@ def analyze_single_stock(symbol: str, index_df: pd.DataFrame, market_state: Mark
         return
     
     # Analyze
-    result = analyze_stock(symbol, stock_df, index_df, fundamental_data=None)
+    try:
+        result = analyze_stock(symbol, stock_df, index_df, fundamental_data=None)
+    except Exception as e:
+        st.error(f"❌ Analysis failed for {symbol}: {str(e)}")
+        return
     
     # Display results
     st.markdown(f"## {symbol}")
@@ -900,13 +909,27 @@ def update_trade_status(trade: PaperTrade):
         st.error(f"Failed to load data for {trade.symbol}")
         return
     
+    # Validate data
+    if stock_df.empty or len(stock_df) < 50:
+        st.warning(f"⚠️ Insufficient data for {trade.symbol} ({len(stock_df)} rows)")
+        return
+    
     # Get today's data
     latest = stock_df.iloc[-1]
     current_date = stock_df.index[-1]
     
     # Analyze current state
     index_df = load_index_data()
-    result = analyze_stock(trade.symbol, stock_df, index_df)
+    
+    if index_df.empty or len(index_df) < 50:
+        st.warning(f"⚠️ Insufficient index data ({len(index_df)} rows)")
+        return
+    
+    try:
+        result = analyze_stock(trade.symbol, stock_df, index_df)
+    except Exception as e:
+        st.error(f"❌ Analysis failed for {trade.symbol}: {str(e)}")
+        return
     
     # Update trade
     closed_trade = st.session_state.engine.update_trade(
