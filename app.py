@@ -247,6 +247,18 @@ def main():
         st.sidebar.metric("Win Rate", f"{stats.get('win_rate', 0):.1f}%")
     
     st.sidebar.markdown("---")
+    
+    # Storage status indicator
+    storage = st.session_state.storage
+    if storage.drive_available:
+        st.sidebar.success(f"☁️ **Drive Connected**")
+        st.sidebar.caption(f"📁 Folder: {storage.config.DRIVE_FOLDER_NAME}")
+    else:
+        st.sidebar.warning(f"💾 **Local Storage Only**")
+        if storage.drive_error:
+            st.sidebar.caption(f"⚠️ {storage.drive_error[:50]}...")
+    
+    st.sidebar.markdown("---")
     st.sidebar.caption(f"🕐 IST: {ist_now().strftime('%I:%M %p')}")
     st.sidebar.caption(f"📅 {ist_today().strftime('%d %b %Y')}")
     
