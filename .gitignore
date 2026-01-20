@@ -1,3 +1,19 @@
+# Environment variables
+.env
+.streamlit/secrets.toml
+
+# OAuth token (auto-generated at runtime)
 token.json
+-token.json
+
+# Legacy config files (deprecated - use .env instead)
 credentials.json
 angel_one_config.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data and logs
+data/
+logs/
