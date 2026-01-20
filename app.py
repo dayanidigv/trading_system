@@ -13,7 +13,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pathlib import Path
 import pytz
 import os
@@ -44,10 +44,8 @@ from paper_trade_engine import (
     PaperTradeEngine, TradeConfig, PaperTrade,
     TradeStatus, TradeOutcome, ExitReason
 )
-from storage_manager import (
-    StorageManager, analysis_result_to_log_entry
-)
 
+from sheets_storage_manager import analysis_result_to_log_entry
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -108,7 +106,8 @@ def load_stock_data(symbol: str, period: str = "6mo") -> pd.DataFrame:
                     import time
                     time.sleep(retry_delay)
                     continue
-                return None
+                # Return empty DataFrame, not None (consistent return type)
+                return pd.DataFrame()
             
             # Handle MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
@@ -126,9 +125,9 @@ def load_stock_data(symbol: str, period: str = "6mo") -> pd.DataFrame:
                 time.sleep(retry_delay)
             else:
                 st.error(f"❌ Failed to load {symbol} after {max_retries} attempts: {e}")
-                return None
+                return pd.DataFrame()  # Consistent return type
     
-    return None
+    return pd.DataFrame()  # Fallback
 
 
 @st.cache_data(ttl=3600)
@@ -139,13 +138,13 @@ def load_index_data(symbol: str = BENCHMARK_INDEX) -> pd.DataFrame:
     # Try primary symbol
     df = load_stock_data(symbol)
     
-    if df is None or df.empty:
+    if df.empty:
         # Fallback: Try alternate symbol format
         alt_symbol = "^NSEI" if symbol != "^NSEI" else "NIFTY50.NS"
         print(f"⚠️ Primary index failed, trying fallback: {alt_symbol}")
         df = load_stock_data(alt_symbol)
     
-    if df is None or df.empty:
+    if df.empty:
         st.error(f"""
         ❌ **Failed to load index data from Yahoo Finance**
         
@@ -212,9 +211,18 @@ def main():
     
     # Initialize session state
     if 'storage' not in st.session_state:
-        # Always try Drive first - will auto-create token.json from env vars if available
-        # Falls back to local storage if Drive connection fails
-        st.session_state.storage = StorageManager(use_drive=True)
+        # Try Sheets first, fallback to Drive
+        try:
+            from sheets_storage_manager import SheetsStorageManager
+            st.session_state.storage = SheetsStorageManager()
+            if not st.session_state.storage.available:
+                raise Exception("Sheets not configured, using fallback")
+        except Exception as e:
+            # Fallback to Drive storage
+            print(f"⚠️ Sheets unavailable: {e}")
+            print("📁 Falling back to Drive storage")
+            from storage_manager import StorageManager
+            st.session_state.storage = StorageManager(use_drive=True)
     
     if 'engine' not in st.session_state:
         st.session_state.engine = PaperTradeEngine(TradeConfig())
@@ -254,12 +262,18 @@ def main():
     
     # Storage status indicator
     storage = st.session_state.storage
+    storage_type = getattr(storage, 'storage_type', 'drive')  # 'sheets', 'drive', or 'local'
+    
     if storage.drive_available:
-        st.sidebar.success(f"☁️ **Drive Connected**")
-        st.sidebar.caption(f"📁 Folder: {storage.config.DRIVE_FOLDER_NAME}")
+        if storage_type == 'sheets':
+            st.sidebar.success(f"📊 **Google Sheets Connected**")
+            st.sidebar.caption(f"Real-time sync enabled")
+        else:
+            st.sidebar.success(f"☁️ **Drive Connected**")
+            st.sidebar.caption(f"📁 Folder: {storage.config.DRIVE_FOLDER_NAME}")
     else:
         st.sidebar.warning(f"💾 **Local Storage Only**")
-        if storage.drive_error:
+        if hasattr(storage, 'drive_error') and storage.drive_error:
             st.sidebar.caption(f"⚠️ {storage.drive_error[:50]}...")
     
     st.sidebar.markdown("---")
@@ -320,7 +334,7 @@ def show_daily_analysis():
     # Load index data
     index_df = load_index_data()
     
-    if index_df is None:
+    if index_df.empty:
         st.error("❌ Failed to load index data. Cannot proceed with analysis.")
         return
     
@@ -413,7 +427,7 @@ def analyze_universe(symbols: List[str], index_df: pd.DataFrame, market_state: M
         # Load stock data
         stock_df = load_stock_data(symbol)
         
-        if stock_df is None or len(stock_df) < 60:
+        if stock_df.empty or len(stock_df) < 60:
             continue
         
         # Analyze
@@ -514,7 +528,7 @@ def analyze_single_stock(symbol: str, index_df: pd.DataFrame, market_state: Mark
     
     stock_df = load_stock_data(symbol)
     
-    if stock_df is None or len(stock_df) < 60:
+    if stock_df.empty or len(stock_df) < 60:
         st.error(f"Insufficient data for {symbol}")
         return
     
@@ -894,25 +908,62 @@ def display_open_trades():
             
             st.caption(f"Entry Context: {trade.trend_state} | {trade.entry_state} | {trade.rs_state} | {trade.behavior}")
             
-            # Update trade button
+            # Update trade button with enhanced feedback
             if st.button(f"Update {trade.symbol}", key=f"update_{trade.trade_id}"):
-                update_trade_status(trade)
+                with st.spinner(f"Updating {trade.symbol}..."):
+                    closed_trade = update_trade_status(trade)
+                    
+                    # Save immediately after update
+                    trades_df = st.session_state.engine.to_dataframe(include_open=True)
+                    save_success = st.session_state.storage.save_trades(trades_df)
+                    
+                    # Provide clear feedback
+                    if closed_trade:
+                        st.success(
+                            f"✅ Trade closed: {closed_trade.outcome.value} "
+                            f"via {closed_trade.exit_reason.value}"
+                        )
+                        st.info(f"📊 Final P&L: {closed_trade.pnl_pct:+.2f}% (₹{closed_trade.pnl:+,.2f})")
+                        st.caption(f"📅 Held for {closed_trade.holding_days} days | MFE: {closed_trade.mfe:.1f}% | MAE: {closed_trade.mae:.1f}%")
+                    else:
+                        st.info(f"📈 Trade {trade.symbol} still open - monitoring continues")
+                    
+                    if save_success:
+                        st.caption("💾 Changes saved to storage")
+                    else:
+                        st.warning("⚠️ Failed to save to storage (local cache updated)")
+                    
+                    # Auto-refresh UI to show updated state
+                    st.rerun()
 
 
-def update_trade_status(trade: PaperTrade):
-    """Update open trade with current market data"""
+def update_trade_status(trade: PaperTrade) -> Optional[PaperTrade]:
+    """
+    Update open trade with current market data
     
-    # Load current data
-    stock_df = load_stock_data(trade.symbol, period="1mo")
+    Args:
+        trade: PaperTrade to update
     
-    if stock_df is None or stock_df.empty:
+    Returns:
+        PaperTrade if closed, None if still open
+    """
+    
+    # Load current data - try longer period if needed
+    stock_df = load_stock_data(trade.symbol, period="3mo")
+    
+    if stock_df.empty:
         st.error(f"Failed to load data for {trade.symbol}")
-        return
+        return None
     
-    # Validate data
-    if stock_df.empty or len(stock_df) < 50:
-        st.warning(f"⚠️ Insufficient data for {trade.symbol} ({len(stock_df)} rows)")
-        return
+    # Validate data - if insufficient, try 6 months
+    if len(stock_df) < 50:
+        st.info(f"📊 Fetching more data for {trade.symbol}... ({len(stock_df)} rows from 3mo)")
+        stock_df = load_stock_data(trade.symbol, period="6mo")
+        
+        if len(stock_df) < 50:
+            st.warning(f"⚠️ Insufficient data for {trade.symbol} ({len(stock_df)} rows even with 6mo period)")
+            st.caption("Stock may have low trading volume or be recently listed")
+            return None
     
     # Get today's data
     latest = stock_df.iloc[-1]
@@ -923,13 +974,22 @@ def update_trade_status(trade: PaperTrade):
     
     if index_df.empty or len(index_df) < 50:
         st.warning(f"⚠️ Insufficient index data ({len(index_df)} rows)")
-        return
+        return None
     
     try:
         result = analyze_stock(trade.symbol, stock_df, index_df)
+        behavior = result.behavior.value
     except Exception as e:
-        st.error(f"❌ Analysis failed for {trade.symbol}: {str(e)}")
-        return
+        # If analysis fails due to insufficient data after cleaning, use basic update
+        error_msg = str(e)
+        if "Insufficient data" in error_msg and "after cleaning" in error_msg:
+            st.warning(f"⚠️ {trade.symbol}: Using price-only update (insufficient data for full analysis)")
+            st.caption(f"Details: {error_msg}")
+            # Use last known behavior for the update
+            behavior = trade.behavior
+        else:
+            st.error(f"❌ Analysis failed for {trade.symbol}: {error_msg}")
+            return None
     
     # Update trade
     closed_trade = st.session_state.engine.update_trade(
@@ -938,17 +998,10 @@ def update_trade_status(trade: PaperTrade):
         latest['Close'],
         latest['Low'],
         latest['High'],
-        result.behavior.value
+        behavior
     )
     
-    if closed_trade:
-        st.success(f"Trade closed: {closed_trade.outcome.value} via {closed_trade.exit_reason.value}")
-        
-        # Save
-        trades_df = st.session_state.engine.to_dataframe(include_open=True)
-        st.session_state.storage.save_trades(trades_df)
-    else:
-        st.info("Trade still open")
+    return closed_trade
 
 
 def display_closed_trades():
@@ -1072,37 +1125,46 @@ def show_settings():
     storage = st.session_state.storage
     
     col1, col2, col3 = st.columns(3)
+    storage_type = getattr(storage, 'storage_type', 'drive')
     
     with col1:
         if storage.use_drive and storage.drive_available:
-            st.success("✅ Google Drive Connected")
-            st.caption("Primary storage: Cloud")
+            if storage_type == 'sheets':
+                st.success("✅ Google Sheets Connected")
+                st.caption("Primary storage: Cloud (Sheets)")
+            else:
+                st.success("✅ Google Drive Connected")
+                st.caption("Primary storage: Cloud (Drive)")
         elif storage.use_drive and not storage.drive_available:
-            st.error("❌ Drive Connection Failed")
+            st.error("❌ Cloud Connection Failed")
             st.caption("Using local fallback")
         else:
             st.info("📁 Local Storage Only")
-            st.caption("Drive not enabled")
+            st.caption("Cloud not enabled")
     
     with col2:
         if storage.use_drive and storage.drive_available:
-            st.metric("Storage Mode", "Cloud-First")
+            if storage_type == 'sheets':
+                st.metric("Storage Mode", "Sheets")
+            else:
+                st.metric("Storage Mode", "Drive")
         else:
-            st.metric("Storage Mode", "Local Only")
+            st.metric("Storage Mode", "Local")
     
     with col3:
         if storage.use_drive and storage.drive_available:
-            st.metric("Sync Status", "Auto")
+            st.metric("Sync Status", "Real-time" if storage_type == 'sheets' else "Auto")
         else:
             st.metric("Sync Status", "Disabled")
     
-    # Show error details if Drive failed
+    # Show error details if cloud storage failed
     if storage.use_drive and not storage.drive_available:
+        storage_name = "Sheets" if storage_type == 'sheets' else "Drive"
         st.error(f"""
-        **⚠️ Drive Connection Error:**
+        **⚠️ {storage_name} Connection Error:**
         
         ```
-        {storage.drive_error}
+        {getattr(storage, 'drive_error', 'Unknown error')}
         ```
         
         **Setup Steps:**

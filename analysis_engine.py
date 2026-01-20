@@ -537,12 +537,24 @@ def analyze_stock(
         AnalysisResult with complete analysis
     """
     
-    # Validate input data
-    if stock_df.empty or len(stock_df) < 50:
-        raise ValueError(f"Insufficient data for {symbol}: {len(stock_df)} rows (need at least 50)")
+    # Define minimum required data
+    MIN_REQUIRED_ROWS = 50
     
-    if index_df.empty or len(index_df) < 50:
-        raise ValueError(f"Insufficient index data: {len(index_df)} rows (need at least 50)")
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 1: Initial Data Validation
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    if stock_df.empty or len(stock_df) < MIN_REQUIRED_ROWS:
+        raise ValueError(
+            f"Insufficient data for {symbol}: {len(stock_df)} rows "
+            f"(need at least {MIN_REQUIRED_ROWS})"
+        )
+    
+    if index_df.empty or len(index_df) < MIN_REQUIRED_ROWS:
+        raise ValueError(
+            f"Insufficient index data: {len(index_df)} rows "
+            f"(need at least {MIN_REQUIRED_ROWS})"
+        )
     
     # Layer-0: Market State
     market_state = analyze_market_state(index_df)
@@ -550,7 +562,10 @@ def analyze_stock(
     # Layer-0.5: Fundamentals
     fund_state, fund_score, fund_reasons = analyze_fundamentals(fundamental_data)
     
-    # Enrich stock data
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 2: Data Enrichment (Add Indicators)
+    # ═══════════════════════════════════════════════════════════════════════
+    
     stock_df = stock_df.copy()
     stock_df['EMA20'] = calculate_ema(stock_df['Close'], 20)
     stock_df['EMA50'] = calculate_ema(stock_df['Close'], 50)
@@ -558,9 +573,29 @@ def analyze_stock(
     stock_df['VOL_AVG_20'] = stock_df['Volume'].rolling(20).mean()
     stock_df = stock_df.dropna(subset=['EMA20', 'EMA50', 'RSI', 'VOL_AVG_20'])
     
-    # Validate enriched data
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 3: Post-Enrichment Validation (CRITICAL)
+    # ═══════════════════════════════════════════════════════════════════════
+    # After dropna(), we might have lost rows due to:
+    # - Rolling windows (EMA20 needs 20 rows, EMA50 needs 50 rows)
+    # - RSI calculation (needs 14+ rows)
+    # - Volume average (needs 20 rows)
+    # 
+    # We must re-validate to ensure sufficient data remains for analysis.
+    # ═══════════════════════════════════════════════════════════════════════
+    
     if stock_df.empty:
-        raise ValueError(f"No data remaining after indicator calculation for {symbol}")
+        raise ValueError(
+            f"No data remaining for {symbol} after indicator calculation. "
+            f"Original data likely had too many NaN values."
+        )
+    
+    if len(stock_df) < MIN_REQUIRED_ROWS:
+        raise ValueError(
+            f"Insufficient data for {symbol} after cleaning: {len(stock_df)} rows "
+            f"(need at least {MIN_REQUIRED_ROWS}). "
+            f"Indicators consumed too many rows from the dataset."
+        )
     
     # Layer-1: Technical Analysis
     trend_conds, entry_conds, trend_state, entry_state = analyze_technical(stock_df)
@@ -576,6 +611,15 @@ def analyze_stock(
     
     # Extract latest values
     latest = stock_df.iloc[-1]
+    
+    # Convert timestamp to IST for consistency
+    latest_date = stock_df.index[-1]
+    if latest_date.tz is None:
+        # If timezone-naive, assume UTC and convert to IST
+        latest_date = latest_date.tz_localize('UTC').tz_convert(IST)
+    elif latest_date.tz != IST:
+        # If different timezone, convert to IST
+        latest_date = latest_date.tz_convert(IST)
     
     # Determine trade eligibility
     rejection_reasons = []
@@ -599,7 +643,7 @@ def analyze_stock(
     
     return AnalysisResult(
         symbol=symbol,
-        date=stock_df.index[-1],
+        date=latest_date,
         market_state=market_state,
         fundamental_state=fund_state,
         fundamental_score=fund_score,

@@ -255,10 +255,41 @@ class PaperTradeEngine:
         if trade.status == TradeStatus.CLOSED:
             return None
         
-        # Update holding days
-        trade.holding_days = (current_date - trade.entry_date).days
+        # Ensure dates are timezone-aware for correct calculation
+        # Convert to date-only for holding days calculation
+        entry_date_only = pd.to_datetime(trade.entry_date).date()
+        current_date_only = pd.to_datetime(current_date).date()
         
-        # Update MFE/MAE
+        # Update holding days (calendar days)
+        trade.holding_days = (current_date_only - entry_date_only).days
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # Update MFE/MAE BEFORE Exit Checks (Critical Design Decision)
+        # ═══════════════════════════════════════════════════════════════════
+        # 
+        # MFE/MAE are updated using the day's high/low BEFORE checking exits.
+        # This is intentional and correct because:
+        #
+        # 1. INTRADAY REALITY: The high/low represent actual price points that
+        #    occurred during the trading day, regardless of exit timing.
+        #
+        # 2. ACCURATE TRACKING: Even if stopped out, we want to know what the
+        #    maximum favorable/adverse excursion was during that day. This gives
+        #    us "what could have been" data for post-analysis.
+        #
+        # 3. EXAMPLE: Stock opens at entry, drops to stop loss, then rallies:
+        #    - Stop loss hit: Exit at stop price ✓
+        #    - BUT day's high was above entry: MFE should reflect this ✓
+        #    - This shows opportunity cost and volatility patterns
+        #
+        # 4. STATISTICAL VALUE: MFE/MAE help analyze:
+        #    - Whether stops are too tight (high MAE but wins)
+        #    - Whether targets are too ambitious (high MFE but misses)
+        #    - Trade efficiency (MFE vs actual gain)
+        #
+        # DO NOT move these calculations after exit checks.
+        # ═══════════════════════════════════════════════════════════════════
+        
         unrealized_pnl_pct = (current_price - trade.entry_price) / trade.entry_price
         high_pnl_pct = (high - trade.entry_price) / trade.entry_price
         low_pnl_pct = (low - trade.entry_price) / trade.entry_price
@@ -412,10 +443,25 @@ class PaperTradeEngine:
         if df.empty:
             return
         
-        def parse_enum_value(enum_class, value):
-            """Parse enum value handling both 'VALUE' and 'EnumClass.VALUE' formats"""
+        def parse_enum_value(enum_class, value, default=None):
+            """
+            Parse enum value with robust error handling and fallback
+            
+            Handles multiple formats:
+            - 'VALUE' → Direct enum lookup
+            - 'EnumClass.VALUE' → Strips class prefix
+            - 'EnumClass(VALUE)' → Extracts from parens
+            
+            Args:
+                enum_class: The enum class to parse into
+                value: The value to parse (can be string, enum, or None)
+                default: Default value if parsing fails (None = first enum value)
+            
+            Returns:
+                Parsed enum value or default/first enum value
+            """
             if pd.isna(value) or value == '':
-                return None
+                return default if default else list(enum_class)[0]
             
             value_str = str(value).strip()
             
@@ -423,32 +469,23 @@ class PaperTradeEngine:
             if '.' in value_str:
                 value_str = value_str.split('.')[-1]
             
-            # Also handle 'EnumClass(VALUE)' format
+            # Handle 'EnumClass(VALUE)' format
             if '(' in value_str and ')' in value_str:
                 value_str = value_str.split('(')[1].split(')')[0]
             
             try:
                 return enum_class[value_str]
             except KeyError:
-                print(f"⚠️ Could not parse {enum_class.__name__} value: '{value}' -> '{value_str}'")
-                return None
+                fallback = default if default else list(enum_class)[0]
+                print(f"⚠️ Invalid {enum_class.__name__}: '{value}' → using {fallback.value}")
+                return fallback
         
         try:
             for idx, row in df.iterrows():
-                # Parse status enum
-                status = parse_enum_value(TradeStatus, row['status'])
-                if status is None:
-                    print(f"⚠️ Row {idx}: Invalid status '{row['status']}', defaulting to OPEN")
-                    status = TradeStatus.OPEN  # Default for safety
-                
-                # Parse exit_reason and outcome enums (handle PENDING for open trades)
-                exit_reason = parse_enum_value(ExitReason, row['exit_reason'])
-                if exit_reason is None:
-                    exit_reason = ExitReason.PENDING
-                
-                outcome = parse_enum_value(TradeOutcome, row['outcome'])
-                if outcome is None:
-                    outcome = TradeOutcome.PENDING
+                # Parse enums with appropriate defaults
+                status = parse_enum_value(TradeStatus, row['status'], default=TradeStatus.OPEN)
+                exit_reason = parse_enum_value(ExitReason, row['exit_reason'], default=ExitReason.PENDING)
+                outcome = parse_enum_value(TradeOutcome, row['outcome'], default=TradeOutcome.PENDING)
                 
                 trade = PaperTrade(
                     trade_id=row['trade_id'],
