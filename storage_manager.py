@@ -125,16 +125,28 @@ class DriveClient:
         
         # Load existing token if available
         if token_path.exists():
-            creds = Credentials.from_authorized_user_file(
-                str(token_path),
-                ['https://www.googleapis.com/auth/drive.file']
-            )
+            try:
+                creds = Credentials.from_authorized_user_file(
+                    str(token_path),
+                    ['https://www.googleapis.com/auth/drive.file']
+                )
+            except Exception as e:
+                print(f"⚠️  Could not load token: {e}")
         
         # If no valid credentials, get new ones
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
+                try:
+                    creds.refresh(Request())
+                    # Save refreshed token
+                    with open(token_path, 'w') as token:
+                        token.write(creds.to_json())
+                except Exception as e:
+                    print(f"⚠️  Token refresh failed: {e}")
+                    creds = None
+            
+            # If still no valid credentials, try to authenticate
+            if not creds:
                 # Get credentials from environment variables or Streamlit secrets
                 client_id = get_config('GOOGLE_CLIENT_ID')
                 client_secret = get_config('GOOGLE_CLIENT_SECRET')
@@ -142,12 +154,23 @@ class DriveClient:
                 
                 if not all([client_id, client_secret, project_id]):
                     raise ValueError(
-                        "Missing Google OAuth credentials in .env file.\n"
-                        "Please ensure the following variables are set:\n"
-                        "  GOOGLE_CLIENT_ID\n"
-                        "  GOOGLE_CLIENT_SECRET\n"
-                        "  GOOGLE_PROJECT_ID\n"
-                        "See .env.example for reference."
+                        "Missing Google OAuth credentials.\n"
+                        "For local: Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_PROJECT_ID in .env\n"
+                        "For Streamlit Cloud: Add them to secrets.toml in the dashboard.\n"
+                        "Or disable Drive with use_drive=False"
+                    )
+                
+                # Check if we're in a cloud/headless environment
+                import sys
+                is_headless = not sys.stdin.isatty() or 'STREAMLIT_RUNTIME' in os.environ
+                
+                if is_headless:
+                    raise RuntimeError(
+                        "Cannot authenticate in cloud/headless environment.\n"
+                        "Please run locally first to generate token.json, then:\n"
+                        "1. The token will auto-refresh (valid ~7 days)\n"
+                        "2. Or use service account credentials\n"
+                        "3. Or run with use_drive=False for local-only storage"
                     )
                 
                 # Create client config from environment variables
@@ -168,10 +191,10 @@ class DriveClient:
                     ['https://www.googleapis.com/auth/drive.file']
                 )
                 creds = flow.run_local_server(port=0)
-            
-            # Save token for future use
-            with open(token_path, 'w') as token:
-                token.write(creds.to_json())
+                
+                # Save token for future use
+                with open(token_path, 'w') as token:
+                    token.write(creds.to_json())
         
         # Build service
         self.service = build('drive', 'v3', credentials=creds)
