@@ -14,6 +14,10 @@ from pathlib import Path
 from datetime import datetime
 import io
 import pytz
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -59,12 +63,11 @@ class StorageConfig:
     LOCAL_STORAGE_DIR = Path("./data")
     LOCAL_CACHE_DIR = Path("./data/cache")
     
-    # Credentials
-    CREDENTIALS_FILE = "credentials.json"  # Service account or OAuth credentials
-    TOKEN_FILE = "token.json"  # OAuth token (if using OAuth)
+    # OAuth token file (auto-generated at runtime, not a config value)
+    TOKEN_FILE = "token.json"
     
     # Google Drive folder name (will be created if doesn't exist)
-    DRIVE_FOLDER_NAME = "TradingSystem_Data"
+    DRIVE_FOLDER_NAME = os.getenv('DRIVE_FOLDER_NAME', 'TradingSystem_Data')
     
     # File names
     PAPER_TRADES_FILE = "paper_trades.csv"
@@ -85,65 +88,72 @@ class StorageConfig:
 class DriveClient:
     """Google Drive API client wrapper"""
     
-    def __init__(self, credentials_path: str = None):
-        """
-        Initialize Drive client
-        
-        Args:
-            credentials_path: Path to credentials JSON file
-        """
+    def __init__(self):
+        """Initialize Drive client using environment variables"""
         if not DRIVE_AVAILABLE:
             raise ImportError("Google Drive libraries not installed")
         
-        self.credentials_path = credentials_path or StorageConfig.CREDENTIALS_FILE
         self.service = None
         self.folder_id = None
         self._authenticate()
     
     def _authenticate(self):
-        """Authenticate with Google Drive"""
+        """Authenticate with Google Drive using OAuth"""
+        from google.auth.transport.requests import Request
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        
         creds = None
+        token_path = Path(StorageConfig.TOKEN_FILE)
         
-        # Check if credentials file exists
-        if not Path(self.credentials_path).exists():
-            raise FileNotFoundError(
-                f"Credentials file not found: {self.credentials_path}\n"
-                "Please follow setup instructions in README"
+        # Load existing token if available
+        if token_path.exists():
+            creds = Credentials.from_authorized_user_file(
+                str(token_path),
+                ['https://www.googleapis.com/auth/drive.file']
             )
         
-        # Load credentials
-        try:
-            # Try service account first
-            creds = service_account.Credentials.from_service_account_file(
-                self.credentials_path,
-                scopes=['https://www.googleapis.com/auth/drive.file']
-            )
-        except Exception:
-            # Fall back to OAuth (for user accounts)
-            from google.auth.transport.requests import Request
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            
-            token_path = Path(StorageConfig.TOKEN_FILE)
-            
-            if token_path.exists():
-                creds = Credentials.from_authorized_user_file(
-                    str(token_path),
+        # If no valid credentials, get new ones
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                # Get credentials from environment variables
+                client_id = os.getenv('GOOGLE_CLIENT_ID')
+                client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
+                project_id = os.getenv('GOOGLE_PROJECT_ID')
+                
+                if not all([client_id, client_secret, project_id]):
+                    raise ValueError(
+                        "Missing Google OAuth credentials in .env file.\n"
+                        "Please ensure the following variables are set:\n"
+                        "  GOOGLE_CLIENT_ID\n"
+                        "  GOOGLE_CLIENT_SECRET\n"
+                        "  GOOGLE_PROJECT_ID\n"
+                        "See .env.example for reference."
+                    )
+                
+                # Create client config from environment variables
+                client_config = {
+                    "installed": {
+                        "client_id": client_id,
+                        "project_id": project_id,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                        "client_secret": client_secret,
+                        "redirect_uris": ["http://localhost"]
+                    }
+                }
+                
+                flow = InstalledAppFlow.from_client_config(
+                    client_config,
                     ['https://www.googleapis.com/auth/drive.file']
                 )
+                creds = flow.run_local_server(port=0)
             
-            if not creds or not creds.valid:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        self.credentials_path,
-                        ['https://www.googleapis.com/auth/drive.file']
-                    )
-                    creds = flow.run_local_server(port=0)
-                
-                # Save token
-                with open(token_path, 'w') as token:
-                    token.write(creds.to_json())
+            # Save token for future use
+            with open(token_path, 'w') as token:
+                token.write(creds.to_json())
         
         # Build service
         self.service = build('drive', 'v3', credentials=creds)
@@ -323,13 +333,12 @@ class StorageManager:
     3. Sync: Bidirectional (Drive → Local on load, Local → Drive on save)
     """
     
-    def __init__(self, use_drive: bool = True, credentials_path: str = None):
+    def __init__(self, use_drive: bool = True):
         """
         Initialize storage manager
         
         Args:
             use_drive: Use Google Drive (default: True)
-            credentials_path: Path to credentials file
         """
         self.config = StorageConfig()
         self.config.ensure_local_dirs()
@@ -343,7 +352,7 @@ class StorageManager:
         # Initialize Drive
         if self.use_drive:
             try:
-                self.drive_client = DriveClient(credentials_path)
+                self.drive_client = DriveClient()
                 self.folder_id = self.drive_client.get_or_create_folder(
                     self.config.DRIVE_FOLDER_NAME
                 )

@@ -6,6 +6,9 @@ yfinance
 plotly
 pytz
 
+# Environment Variables
+python-dotenv
+
 # Google Drive Integration
 google-api-python-client
 google-auth-httplib2
