@@ -16,8 +16,26 @@ import io
 import pytz
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load environment variables from .env file (for local development)
 load_dotenv()
+
+# Helper function to get config from .env or Streamlit secrets
+def get_config(key: str, default=None):
+    """Get configuration from environment variables or Streamlit secrets"""
+    # First try environment variables (.env file)
+    value = os.getenv(key)
+    if value:
+        return value
+    
+    # Then try Streamlit secrets (for cloud deployment)
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except:
+        pass
+    
+    return default
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -67,7 +85,7 @@ class StorageConfig:
     TOKEN_FILE = "token.json"
     
     # Google Drive folder name (will be created if doesn't exist)
-    DRIVE_FOLDER_NAME = os.getenv('DRIVE_FOLDER_NAME', 'TradingSystem_Data')
+    DRIVE_FOLDER_NAME = get_config('DRIVE_FOLDER_NAME', 'TradingSystem_Data')
     
     # File names
     PAPER_TRADES_FILE = "paper_trades.csv"
@@ -117,10 +135,10 @@ class DriveClient:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
-                # Get credentials from environment variables
-                client_id = os.getenv('GOOGLE_CLIENT_ID')
-                client_secret = os.getenv('GOOGLE_CLIENT_SECRET')
-                project_id = os.getenv('GOOGLE_PROJECT_ID')
+                # Get credentials from environment variables or Streamlit secrets
+                client_id = get_config('GOOGLE_CLIENT_ID')
+                client_secret = get_config('GOOGLE_CLIENT_SECRET')
+                project_id = get_config('GOOGLE_PROJECT_ID')
                 
                 if not all([client_id, client_secret, project_id]):
                     raise ValueError(
