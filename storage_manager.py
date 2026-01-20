@@ -123,6 +123,36 @@ class DriveClient:
         creds = None
         token_path = Path(StorageConfig.TOKEN_FILE)
         
+        # First, try to create token.json from environment variables (for cloud deployment)
+        token_from_env = get_config('GOOGLE_TOKEN')
+        refresh_token_from_env = get_config('GOOGLE_REFRESH_TOKEN')
+        
+        if token_from_env and refresh_token_from_env:
+            # Create token.json from environment variables
+            client_id = get_config('GOOGLE_CLIENT_ID')
+            client_secret = get_config('GOOGLE_CLIENT_SECRET')
+            token_uri = get_config('GOOGLE_TOKEN_URI', 'https://oauth2.googleapis.com/token')
+            scopes_str = get_config('GOOGLE_SCOPES', 'https://www.googleapis.com/auth/drive.file')
+            expiry = get_config('GOOGLE_EXPIRY')
+            
+            token_data = {
+                "token": token_from_env,
+                "refresh_token": refresh_token_from_env,
+                "token_uri": token_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scopes": [scopes_str] if isinstance(scopes_str, str) else scopes_str,
+                "universe_domain": "googleapis.com",
+                "account": "",
+                "expiry": expiry
+            }
+            
+            # Write token to file
+            with open(token_path, 'w') as f:
+                json.dump(token_data, f)
+            
+            print("✅ Created token.json from environment variables")
+        
         # Load existing token if available
         if token_path.exists():
             try:
@@ -138,9 +168,10 @@ class DriveClient:
             if creds and creds.expired and creds.refresh_token:
                 try:
                     creds.refresh(Request())
-                    # Save refreshed token
+                    # Save refreshed token back to file AND update env values
                     with open(token_path, 'w') as token:
                         token.write(creds.to_json())
+                    print("✅ Token refreshed successfully")
                 except Exception as e:
                     print(f"⚠️  Token refresh failed: {e}")
                     creds = None
@@ -155,8 +186,8 @@ class DriveClient:
                 if not all([client_id, client_secret, project_id]):
                     raise ValueError(
                         "Missing Google OAuth credentials.\n"
-                        "For local: Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_PROJECT_ID in .env\n"
-                        "For Streamlit Cloud: Add them to secrets.toml in the dashboard.\n"
+                        "For local: Set credentials in .env\n"
+                        "For Streamlit Cloud: Add them to secrets.toml\n"
                         "Or disable Drive with use_drive=False"
                     )
                 
@@ -167,10 +198,9 @@ class DriveClient:
                 if is_headless:
                     raise RuntimeError(
                         "Cannot authenticate in cloud/headless environment.\n"
-                        "Please run locally first to generate token.json, then:\n"
-                        "1. The token will auto-refresh (valid ~7 days)\n"
-                        "2. Or use service account credentials\n"
-                        "3. Or run with use_drive=False for local-only storage"
+                        "Please run locally first to generate token, then add token values to secrets.toml:\n"
+                        "  GOOGLE_TOKEN, GOOGLE_REFRESH_TOKEN, GOOGLE_EXPIRY\n"
+                        "Or run with use_drive=False for local-only storage"
                     )
                 
                 # Create client config from environment variables
@@ -195,6 +225,9 @@ class DriveClient:
                 # Save token for future use
                 with open(token_path, 'w') as token:
                     token.write(creds.to_json())
+                
+                print(f"✅ Token saved to {token_path}")
+                print(f"📝 Copy token values to .env or secrets.toml for cloud deployment")
         
         # Build service
         self.service = build('drive', 'v3', credentials=creds)

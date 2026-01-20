@@ -212,18 +212,9 @@ def main():
     
     # Initialize session state
     if 'storage' not in st.session_state:
-        # Check if we're in Streamlit Cloud (headless environment)
-        is_cloud = 'STREAMLIT_RUNTIME' in os.environ or not os.sys.stdin.isatty()
-        
-        # In cloud without token.json, use local-only storage
-        # Drive requires token.json to be pre-generated locally
-        token_exists = Path("token.json").exists()
-        use_drive = token_exists  # Only enable if token is available
-        
-        if is_cloud and not token_exists:
-            st.info("ℹ️ Running in cloud mode with local storage. To enable Google Drive sync, authenticate locally first.")
-        
-        st.session_state.storage = StorageManager(use_drive=use_drive)
+        # Always try Drive first - will auto-create token.json from env vars if available
+        # Falls back to local storage if Drive connection fails
+        st.session_state.storage = StorageManager(use_drive=True)
     
     if 'engine' not in st.session_state:
         st.session_state.engine = PaperTradeEngine(TradeConfig())
