@@ -117,32 +117,6 @@ class TradeConfig:
     STOP_LOSS_PCT = 0.05  # 5% stop loss
     TARGET_PCT = 0.10     # 10% target (2:1 R:R)
     MAX_HOLDING_DAYS = 10  # Max 10 trading days
-    
-    # Entry rules (from design doc)
-    @staticmethod
-    def entry_allowed(analysis_result) -> bool:
-        """
-        Entry rules from master design:
-        - Fundamentals = PASS or NEUTRAL
-        - TREND = STRONG
-        - ENTRY = OK
-        - RS = STRONG
-        - Behavior = CONTINUATION
-        """
-        from analysis_engine import (
-            FundamentalState, TrendState, 
-            EntryState, RSState, Behavior
-        )
-        
-        checks = [
-            analysis_result.fundamental_state in [FundamentalState.PASS, FundamentalState.NEUTRAL],
-            analysis_result.trend_state == TrendState.STRONG,
-            analysis_result.entry_state == EntryState.OK,
-            analysis_result.rs_state == RSState.STRONG,
-            analysis_result.behavior == Behavior.CONTINUATION,
-        ]
-        
-        return all(checks)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -260,8 +234,9 @@ class PaperTradeEngine:
         entry_date_only = pd.to_datetime(trade.entry_date).date()
         current_date_only = pd.to_datetime(current_date).date()
         
-        # Update holding days (calendar days)
-        trade.holding_days = (current_date_only - entry_date_only).days
+        # Update holding days (TRADING DAYS, not calendar days)
+        # MAX_HOLDING_DAYS = 10 means 10 trading sessions, excluding weekends/holidays
+        trade.holding_days = len(pd.bdate_range(entry_date_only, current_date_only)) - 1
         
         # ═══════════════════════════════════════════════════════════════════
         # Update MFE/MAE BEFORE Exit Checks (Critical Design Decision)
@@ -290,12 +265,14 @@ class PaperTradeEngine:
         # DO NOT move these calculations after exit checks.
         # ═══════════════════════════════════════════════════════════════════
         
-        unrealized_pnl_pct = (current_price - trade.entry_price) / trade.entry_price
-        high_pnl_pct = (high - trade.entry_price) / trade.entry_price
-        low_pnl_pct = (low - trade.entry_price) / trade.entry_price
-        
-        trade.mfe = max(trade.mfe, high_pnl_pct * 100)
-        trade.mae = min(trade.mae, low_pnl_pct * 100)
+        # Only update MFE/MAE from day after entry onwards
+        # Entry day high/low can include pre-entry price action (EOD entry)
+        if current_date_only > entry_date_only:
+            high_pnl_pct = (high - trade.entry_price) / trade.entry_price
+            low_pnl_pct = (low - trade.entry_price) / trade.entry_price
+            
+            trade.mfe = max(trade.mfe, high_pnl_pct * 100)
+            trade.mae = min(trade.mae, low_pnl_pct * 100)
         
         # EXIT RULES (Priority Order)
         
